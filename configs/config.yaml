@@ -1,0 +1,19 @@
+server:
+  port: "8080"
+  read_timeout: 5s
+  write_timeout: 5s
+
+database:
+  max_open_conns: 20
+  max_idle_conns: 10
+  conn_max_lifetime: 1h
+
+redis:
+  pool_size: 10
+
+nats:
+  subject_new: "notifications.new"
+  subject_read: "notifications.read"
+
+notifications:
+  default_priority: "medium"

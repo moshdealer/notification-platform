@@ -1,0 +1,42 @@
+package config
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/spf13/viper"
+)
+
+func Load() (*Config, error) {
+	v := viper.New()
+
+	// Пути для конфига
+	v.SetConfigName("config")
+	v.SetConfigType("yaml")
+	v.AddConfigPath("./configs")
+
+	// Связали структуру с переменными окружениями
+	_ = v.BindEnv("database.dsn", "POSTGRES_DSN")
+	_ = v.BindEnv("redis.addr", "REDIS_ADDR")
+	_ = v.BindEnv("nats.addr", "NATS_URL")
+
+	v.SetEnvPrefix("NS")
+	v.AutomaticEnv()
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+
+	// Считали yaml-конфиг
+	if err := v.ReadInConfig(); err != nil {
+		return nil, fmt.Errorf("read config error: %w", err)
+	}
+	var cfg Config
+	if err := v.Unmarshal(&cfg); err != nil {
+		return nil, fmt.Errorf("unmarshal error: %w", err)
+	}
+
+	// Считали env-переменные
+	v.GetString("database.dsn")
+	v.GetString("redis.addr")
+	v.GetString("nats.addr")
+
+	return &cfg, nil
+}
