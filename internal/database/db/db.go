@@ -20,13 +20,11 @@ func ConnectAndMigrate(dbCfg *config.DatabaseCfg) (*gorm.DB, error) {
 
 	}
 
-	// Подключаем GORM
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to DB: %w", err)
 	}
 
-	// Получаем sql.DB для golang-migrate
 	sqlDB, err := db.DB()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get sql.DB: %w", err)
