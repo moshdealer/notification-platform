@@ -9,10 +9,9 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	migratepg "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
-	"github.com/moshdealer/notification-service/internal/config"
+	"github.com/moshdealer/notification-platform/pkg/config"
 )
 
-// TODO переписать ошибки
 func ConnectAndMigrate(dbCfg *config.DatabaseCfg) (*gorm.DB, error) {
 	dsn := dbCfg.DatabaseDSN
 	if dsn == "" {
