@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/moshdealer/notification-service/internal/model"
-	"github.com/moshdealer/notification-service/internal/nats"
-	"github.com/moshdealer/notification-service/internal/repository"
+	"github.com/moshdealer/notification-platform/notification-service/internal/model"
+	"github.com/moshdealer/notification-platform/notification-service/internal/nats"
+	"github.com/moshdealer/notification-platform/notification-service/internal/repository"
 )
 
 // NotificationService — бизнес-логика уведомлений

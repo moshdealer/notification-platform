@@ -1,6 +1,7 @@
 services:
-  app:
-    build: .
+  notification-service:
+    build:
+      context: ./notification-service
     ports:
       - "8080:8080"
     depends_on:
@@ -11,7 +12,7 @@ services:
     env_file:
       - .env
     volumes:
-        - ./configs/config.yaml:/app/configs/config.yaml
+      - ./notification-service/configs:/app/configs
 
   postgres:
     image: postgres:15

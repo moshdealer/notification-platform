@@ -5,7 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
-	"github.com/moshdealer/notification-service/internal/redis"
+	"github.com/moshdealer/notification-platform/notification-service/internal/redis"
 )
 
 type Handler struct {

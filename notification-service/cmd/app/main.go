@@ -11,15 +11,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/moshdealer/notification-service/internal/config"
-	"github.com/moshdealer/notification-service/internal/database/db"
-	"github.com/moshdealer/notification-service/internal/handler"
-	"github.com/moshdealer/notification-service/internal/nats"
-	"github.com/moshdealer/notification-service/internal/redis"
-	"github.com/moshdealer/notification-service/internal/repository"
-	"github.com/moshdealer/notification-service/internal/router"
-	"github.com/moshdealer/notification-service/internal/service"
-	"github.com/moshdealer/notification-service/internal/websocket"
+	"github.com/moshdealer/notification-platform/notification-service/internal/handler"
+	"github.com/moshdealer/notification-platform/notification-service/internal/nats"
+	"github.com/moshdealer/notification-platform/notification-service/internal/redis"
+	"github.com/moshdealer/notification-platform/notification-service/internal/repository"
+	"github.com/moshdealer/notification-platform/notification-service/internal/router"
+	"github.com/moshdealer/notification-platform/notification-service/internal/service"
+	"github.com/moshdealer/notification-platform/notification-service/internal/websocket"
+	"github.com/moshdealer/notification-platform/pkg/config"
+	"github.com/moshdealer/notification-platform/pkg/database/db"
 )
 
 /*

@@ -5,8 +5,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/moshdealer/notification-service/internal/model"
-	"github.com/moshdealer/notification-service/internal/service"
+	"github.com/moshdealer/notification-platform/notification-service/internal/model"
+	"github.com/moshdealer/notification-platform/notification-service/internal/service"
 )
 
 type NotificationHandler struct {

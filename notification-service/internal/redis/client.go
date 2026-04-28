@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/moshdealer/notification-service/internal/config"
+	"github.com/moshdealer/notification-platform/notification-service/internal/config"
 	"github.com/redis/go-redis/v9"
 )
 

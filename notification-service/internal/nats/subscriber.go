@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/moshdealer/notification-service/internal/config"
-	"github.com/moshdealer/notification-service/internal/redis"
-	"github.com/moshdealer/notification-service/internal/websocket"
+	"github.com/moshdealer/notification-platform/notification-service/internal/config"
+	"github.com/moshdealer/notification-platform/notification-service/internal/redis"
+	"github.com/moshdealer/notification-platform/notification-service/internal/websocket"
 	"github.com/nats-io/nats.go"
 )
 

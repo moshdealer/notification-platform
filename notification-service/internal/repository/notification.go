@@ -6,7 +6,7 @@ import (
 	"gorm.io/gorm"
 	"time"
 
-	"github.com/moshdealer/notification-service/internal/model"
+	"github.com/moshdealer/notification-platform/notification-service/internal/model"
 )
 
 type NotificationRepository interface {

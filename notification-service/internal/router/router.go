@@ -3,8 +3,8 @@ package router
 import (
 	"github.com/gin-gonic/gin"
 
-	"github.com/moshdealer/notification-service/internal/handler"   // твой существующий handler
-	"github.com/moshdealer/notification-service/internal/websocket" // новый WS handler
+	"github.com/moshdealer/notification-platform/notification-service/internal/handler"   // твой существующий handler
+	"github.com/moshdealer/notification-platform/notification-service/internal/websocket" // новый WS handler
 )
 
 type Router struct {
