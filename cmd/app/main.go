@@ -5,22 +5,48 @@ import (
 	"fmt"
 	"gorm.io/gorm"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/moshdealer/notification-service/internal/config"
 	"github.com/moshdealer/notification-service/internal/database/db"
+	"github.com/moshdealer/notification-service/internal/handler"
+	"github.com/moshdealer/notification-service/internal/nats"
+	"github.com/moshdealer/notification-service/internal/redis"
+	"github.com/moshdealer/notification-service/internal/repository"
+	"github.com/moshdealer/notification-service/internal/router"
+	"github.com/moshdealer/notification-service/internal/service"
+	"github.com/moshdealer/notification-service/internal/websocket"
 )
 
+/*
+На текущий момент реализовано:
+1) Дергая Post /notifications, создаются записи в БД (само сообщение и event)
+2) NatsPublisher каждые 5 сек дергает таблицу Event и отправляет в Nats
+*/
+
+//TODO убрать ненужные комментарии
+// рефакторинг всего как будет работать
+// Redis конфиги
+// Redis тестирование
+// Redis разобраться с ключем (сейчас один ключ на все сообщения для юзера)
+// Разбор каждого модуля
+// Разбор того как мы шлем сообщение в итоге (отказаться от payload)
+// Логирование
+// Auth токены
+
 type App struct {
-	Config *config.Config
-	DB     *gorm.DB
-	//NotificationRepo    repository.NotificationRepository
-	//NotificationService *service.NotificationService
-	//WSManager           *websocket.Manager
-	//NATSPublisher       *broker.Publisher
-	//NATSWorker          *broker.Worker // будет запускать subscriber'ы
+	Config              *config.Config
+	DB                  *gorm.DB
+	NotificationRepo    repository.NotificationRepository
+	NATSPublisher       *nats.Publisher
+	NotificationService *service.NotificationService
+	WSManager           *websocket.Manager
+	RedisClient         *redis.Client
+	NATSSubscriber      *nats.Subscriber
 }
 
 func main() {
@@ -42,45 +68,69 @@ func main() {
 		Config: cfg,
 		DB:     dbConn,
 	}
+
 	fmt.Println(app)
 
-	/*
-		// 4. Репозитории
-		app.NotificationRepo = repository.NewNotificationRepository(app.DB)
+	// 4. Репозитории
+	app.NotificationRepo = repository.NewNotificationRepository(app.DB)
 
-		// 5. WebSocket менеджер
-		app.WSManager = websocket.NewManager()
+	app.NATSPublisher, err = nats.NewPublisher(&app.Config.NATS)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "NATS Publisher connect error: %v\n", err)
+		os.Exit(1)
+	}
 
-		// 6. NATS (publisher + worker)
-		app.NATSPublisher = broker.NewPublisher(cfg.NATS.URL)
-		app.NATSWorker = broker.NewWorker(cfg.NATS.URL, app.NotificationService) // позже передадим service
+	app.NotificationService = service.NewNotificationService(app.NotificationRepo, app.NATSPublisher)
 
-		// 7. Сервисы (зависит от repo + broker + ws)
-		app.NotificationService = service.NewNotificationService(
-			app.NotificationRepo,
-			app.NATSPublisher,
-			app.WSManager,
-		)
+	app.RedisClient = redis.NewClient(&cfg.Redis)
+	app.WSManager = websocket.NewManager()
 
-		// 8. Запускаем worker'ы в фоне
-		go app.NATSWorker.Run() // здесь будут оба subscriber'а (new + read)
+	app.NATSSubscriber = nats.NewSubscriber(&app.Config.NATS, app.WSManager, app.RedisClient)
 
-		// 9. HTTP + WebSocket сервер
-		h := handler.NewHandler(app.NotificationService, app.WSManager)
-	*/
-	// 10. Graceful shutdown
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	/*
-		server := h.SetupRouter() // Gin router
-		go func() {
-			if err := server.Run(":" + cfg.Server.Port); err != nil {
-				log.Fatalf("server failed: %v", err)
-			}
-		}()
-	*/
+	go app.NotificationService.StartOutboxDispatcher(ctx)
+
+	if err := app.NATSSubscriber.Start(); err != nil {
+		log.Printf("NATS Subscriber start error: %v", err)
+	}
+	fmt.Println("NATS WebSocket Subscriber запущен")
+
+	// HTTP сервер
+	notificationHandler := handler.NewNotificationHandler(app.NotificationService)
+	wsHandler := websocket.NewHandler(app.WSManager, app.RedisClient)
+
+	r := router.New(notificationHandler, wsHandler)
+	engine := r.Setup()
+
+	srv := &http.Server{
+		Addr:    ":" + app.Config.Server.Port,
+		Handler: engine,
+	}
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("Server error: %v", err)
+		}
+	}()
+
+	fmt.Printf("Notification service started on http://localhost:%s\n", app.Config.Server.Port)
+	fmt.Println("WebSocket: ws://localhost:" + app.Config.Server.Port + "/ws?user_id=123&token=xxx")
+
 	<-ctx.Done()
-	log.Println("Shutting down...")
-	// здесь shutdown NATS, WS, DB
+	fmt.Println("Shutting down...")
+
+	if app.NATSPublisher != nil {
+		app.NATSPublisher.Close()
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("Shutdown error: %v", err)
+	}
+
+	fmt.Println("Service stopped gracefully")
 }

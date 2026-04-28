@@ -9,7 +9,11 @@ database:
   conn_max_lifetime: 1h
 
 redis:
+  db: 0
   pool_size: 10
+  default_ttl: 24
+  high_ttl: 0
+  unread_key_prefix: "user:%s:unread"
 
 nats:
   subject_new: "notifications.new"

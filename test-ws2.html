@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>WebSocket Test</title>
+</head>
+<body>
+<h2>Notification Service WebSocket Test</h2>
+<div id="log" style="white-space: pre-wrap; font-family: monospace;"></div>
+
+<script>
+    const userId = "12345";     // ← поменяй на свой user_id
+    const token = "anytoken";   // пока любая строка (валидация заглушка)
+
+    const ws = new WebSocket(`ws://localhost:8080/ws?user_id=${userId}&token=${token}`);
+
+    const log = document.getElementById('log');
+
+    function write(msg) {
+        log.innerHTML += msg + "\n";
+        console.log(msg);
+    }
+
+    ws.onopen = () => {
+        write("✅ WebSocket подключён");
+        write(`UserID: ${userId}`);
+    };
+
+    ws.onmessage = (event) => {
+        write("📩 Получено: " + event.data);
+    };
+
+    ws.onclose = () => write("❌ WebSocket закрыт");
+    ws.onerror = (err) => write("🚨 Ошибка: " + err);
+</script>
+</body>
+</html>

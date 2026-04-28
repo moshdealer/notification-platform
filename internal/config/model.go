@@ -23,8 +23,13 @@ type DatabaseCfg struct {
 }
 
 type RedisCfg struct {
-	RedisAddr string `mapstructure:"addr"`
-	PoolSize  int    `mapstructure:"pool_size"`
+	RedisAddr       string `mapstructure:"addr"`
+	RedisPassword   string `mapstructure:"password"`
+	RedisDB         int    `mapstructure:"db"`
+	PoolSize        int    `mapstructure:"pool_size"`
+	DefaultTTL      int    `mapstructure:"default_ttl"`
+	HighTTL         int    `mapstructure:"high_ttl"`
+	UnreadKeyPrefix string `mapstructure:"unread_key_prefix"`
 }
 
 type NATSCfg struct {

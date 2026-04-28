@@ -12,7 +12,6 @@ import (
 	"github.com/moshdealer/notification-service/internal/config"
 )
 
-// TODO переписать ошибки
 func ConnectAndMigrate(dbCfg *config.DatabaseCfg) (*gorm.DB, error) {
 	dsn := dbCfg.DatabaseDSN
 	if dsn == "" {

@@ -15,14 +15,15 @@ func Load() (*Config, error) {
 	v.SetConfigType("yaml")
 	v.AddConfigPath("./configs")
 
+	v.SetEnvPrefix("NS")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	v.AutomaticEnv()
+
 	// Связали структуру с переменными окружениями
 	_ = v.BindEnv("database.dsn", "POSTGRES_DSN")
 	_ = v.BindEnv("redis.addr", "REDIS_ADDR")
-	_ = v.BindEnv("nats.addr", "NATS_URL")
-
-	v.SetEnvPrefix("NS")
-	v.AutomaticEnv()
-	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	_ = v.BindEnv("redis.password", "REDIS_PASSWORD")
+	_ = v.BindEnv("nats.addr", "NATS_ADDR")
 
 	// Считали yaml-конфиг
 	if err := v.ReadInConfig(); err != nil {
@@ -36,7 +37,9 @@ func Load() (*Config, error) {
 	// Считали env-переменные
 	v.GetString("database.dsn")
 	v.GetString("redis.addr")
+	v.GetString("redis.password")
 	v.GetString("nats.addr")
 
+	fmt.Println(cfg)
 	return &cfg, nil
 }

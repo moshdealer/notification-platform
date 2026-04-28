@@ -29,3 +29,6 @@ go.work.sum
 
 # Editor/IDE
 .idea/
+
+# Mac files
+.DS_Store
