@@ -41,8 +41,6 @@ func (s *Subscriber) Start() error {
 	_, err := s.natsConn.QueueSubscribe("notifications.new.*", "notification-service-ws", func(msg *nats.Msg) {
 		userID := strings.TrimPrefix(msg.Subject, "notifications.new.")
 
-		s.wsManager.SendToUser(userID, msg.Data)
-
 		// Если клиента НЕТ онлайн — сохраняем в Redis
 		if !s.wsManager.HasActiveConnections(userID) {
 			if addErr := s.redisClient.AddUnread(context.Background(), userID, msg.Data); addErr != nil {
@@ -50,6 +48,8 @@ func (s *Subscriber) Start() error {
 			} else {
 				fmt.Printf("Saved to Redis for offline user %s\n", userID)
 			}
+		} else {
+			s.wsManager.SendToUser(userID, msg.Data)
 		}
 	})
 	return err

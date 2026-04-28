@@ -11,7 +11,7 @@ import (
 type Handler struct {
 	wsManager   *Manager
 	redisClient *redis.Client
-	// notificationRepo позже
+	//	repo        repository.NotificationRepository
 }
 
 func NewHandler(wsManager *Manager, redisClient *redis.Client) *Handler {

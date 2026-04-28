@@ -9,8 +9,8 @@
 <div id="log" style="white-space: pre-wrap; font-family: monospace;"></div>
 
 <script>
-    const userId = "123456";     // ← поменяй на свой user_id
-    const token = "anytoken";   // пока любая строка (валидация заглушка)
+    const userId = "123456";
+    const token = "anytoken";
 
     const ws = new WebSocket(`ws://localhost:8080/ws?user_id=${userId}&token=${token}`);
 
