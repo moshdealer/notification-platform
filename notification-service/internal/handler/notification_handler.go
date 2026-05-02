@@ -5,8 +5,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/moshdealer/notification-platform/notification-service/internal/model"
 	"github.com/moshdealer/notification-platform/notification-service/internal/service"
+	"github.com/moshdealer/notification-platform/pkg/model"
 )
 
 type NotificationHandler struct {
@@ -62,7 +62,7 @@ func (h *NotificationHandler) MarkAsRead(c *gin.Context) {
 		return
 	}
 
-	if err := h.service.MarkAsRead(c.Request.Context(), req.ID, req.UserID); err != nil {
+	if err := h.service.MarkAsRead(c.Request.Context(), req.ID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "failed to mark as read",
 		})

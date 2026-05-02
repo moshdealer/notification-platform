@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/moshdealer/notification-platform/notification-service/internal/config"
+	"github.com/moshdealer/notification-platform/pkg/config"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -104,4 +104,18 @@ func (c *Client) ClearUnread(ctx context.Context, userID string) error {
 		c.rdb.Del(ctx, keys...)
 	}
 	return nil
+}
+
+// Close — удобная обёртка
+func (c *Client) Close() error {
+	if c.rdb == nil {
+		return nil
+	}
+	err := c.rdb.Close()
+	if err != nil {
+		fmt.Printf("Redis close error: %v\n", err)
+	} else {
+		fmt.Println("Redis client closed")
+	}
+	return err
 }

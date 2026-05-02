@@ -65,22 +65,27 @@ func (m *Manager) Unregister(userID string, c *Client) {
 	c.conn.Close()
 }
 
-func (m *Manager) SendToUser(userID string, data []byte) {
+func (m *Manager) SendToUser(userID string, data []byte) error {
 	m.mu.RLock()
 	conns, ok := m.clients[userID]
 	m.mu.RUnlock()
 
 	if !ok || len(conns) == 0 {
-		return
+		return fmt.Errorf("no active connections for user %s", userID)
 	}
 
+	var lastErr error
 	for client := range conns {
 		select {
 		case client.send <- data:
+			lastErr = nil
+			// успешно
 		default:
+			lastErr = fmt.Errorf("send channel full or closed")
 			go m.Unregister(userID, client)
 		}
 	}
+	return lastErr
 }
 
 func (m *Manager) HasActiveConnections(userID string) bool {
@@ -110,4 +115,24 @@ func (c *Client) writePump(m *Manager) {
 			return // defer сделает cleanup
 		}
 	}
+}
+
+// CloseAll gracefully closes all active WebSocket connections
+func (m *Manager) CloseAll() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for userID, conns := range m.clients {
+		for client := range conns {
+			client.once.Do(func() {
+				close(client.send)
+			})
+			client.conn.Close() // ← правильный доступ
+		}
+		delete(m.clients, userID)
+	}
+
+	m.clients = make(map[string]map[*Client]bool) // очищаем мапу
+
+	fmt.Println("[WS] All WebSocket connections closed")
 }

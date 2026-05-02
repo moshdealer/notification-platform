@@ -1,17 +1,13 @@
-module github.com/moshdealer/notification-platform/notification-service
+module github.com/moshdealer/notification-platform/ws-notifier
 
 go 1.25.0
 
 require (
 	github.com/gin-gonic/gin v1.12.0
-	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/gorilla/websocket v1.5.3
+	github.com/moshdealer/notification-platform/pkg v0.0.0
 	github.com/nats-io/nats.go v1.51.0
 	github.com/redis/go-redis/v9 v9.19.0
-	github.com/spf13/viper v1.21.0
-	gorm.io/datatypes v1.2.7
-	gorm.io/driver/postgres v1.6.0
-	gorm.io/gorm v1.31.1
 )
 
 require (
@@ -31,6 +27,7 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/goccy/go-yaml v1.19.2 // indirect
+	github.com/golang-migrate/migrate/v4 v4.19.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
@@ -56,6 +53,7 @@ require (
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
+	github.com/spf13/viper v1.21.0 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
@@ -69,8 +67,11 @@ require (
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.35.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
+	gorm.io/datatypes v1.2.7 // indirect
 	gorm.io/driver/mysql v1.5.6 // indirect
+	gorm.io/driver/postgres v1.6.0 // indirect
 )
 
-require github.com/moshdealer/notification-platform/pkg v0.0.0
+require gorm.io/gorm v1.31.1
+
 replace github.com/moshdealer/notification-platform/pkg => ../pkg
