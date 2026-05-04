@@ -11,7 +11,7 @@ type Client struct {
 	conn   *websocket.Conn
 	userID string
 	send   chan []byte
-	once   sync.Once // защищает от двойного close
+	once   sync.Once
 }
 
 type Manager struct {
@@ -40,7 +40,7 @@ func (m *Manager) Register(userID string, conn *websocket.Conn) *Client {
 	m.mu.Unlock()
 
 	go client.writePump(m)
-	go client.readPump(m) // для быстрого определения disconnect
+	go client.readPump(m)
 
 	fmt.Printf("[WS] User %s connected\n", userID)
 	return client
@@ -58,29 +58,32 @@ func (m *Manager) Unregister(userID string, c *Client) {
 		}
 	}
 
-	// Безопасное закрытие канала
 	c.once.Do(func() {
 		close(c.send)
 	})
 	c.conn.Close()
 }
 
-func (m *Manager) SendToUser(userID string, data []byte) {
+func (m *Manager) SendToUser(userID string, data []byte) error {
 	m.mu.RLock()
 	conns, ok := m.clients[userID]
 	m.mu.RUnlock()
 
 	if !ok || len(conns) == 0 {
-		return
+		return fmt.Errorf("no active connections for user %s", userID)
 	}
 
+	var lastErr error
 	for client := range conns {
 		select {
 		case client.send <- data:
+			lastErr = nil
 		default:
+			lastErr = fmt.Errorf("send channel full or closed")
 			go m.Unregister(userID, client)
 		}
 	}
+	return lastErr
 }
 
 func (m *Manager) HasActiveConnections(userID string) bool {
@@ -110,4 +113,23 @@ func (c *Client) writePump(m *Manager) {
 			return // defer сделает cleanup
 		}
 	}
+}
+
+func (m *Manager) CloseAll() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for userID, conns := range m.clients {
+		for client := range conns {
+			client.once.Do(func() {
+				close(client.send)
+			})
+			client.conn.Close()
+		}
+		delete(m.clients, userID)
+	}
+
+	m.clients = make(map[string]map[*Client]bool)
+
+	fmt.Println("[WS] All WebSocket connections closed")
 }

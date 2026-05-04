@@ -10,9 +10,9 @@
 
 <script>
     const userId = "12345";
-    const token = "anytoken";  
+    const token = "anytoken";
 
-    const ws = new WebSocket(`ws://localhost:8080/ws?user_id=${userId}&token=${token}`);
+    const ws = new WebSocket(`ws://localhost:8081/ws?user_id=${userId}&token=${token}`);
 
     const log = document.getElementById('log');
 
@@ -22,16 +22,16 @@
     }
 
     ws.onopen = () => {
-        write("✅ WebSocket подключён");
+        write("WebSocket подключён");
         write(`UserID: ${userId}`);
     };
 
     ws.onmessage = (event) => {
-        write("📩 Получено: " + event.data);
+        write("Получено: " + event.data);
     };
 
-    ws.onclose = () => write("❌ WebSocket закрыт");
-    ws.onerror = (err) => write("🚨 Ошибка: " + err);
+    ws.onclose = () => write("WebSocket закрыт");
+    ws.onerror = (err) => write("Ошибка: " + err);
 </script>
 </body>
 </html>

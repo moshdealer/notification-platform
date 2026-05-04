@@ -8,16 +8,12 @@ import (
 
 const (
 	StatusPending   = "pending"
+	StatusSent      = "sent"
 	StatusDelivered = "delivered"
 	StatusRead      = "read"
+	StatusFailed    = "failed"
 	StatusExpired   = "expired"
-
-	OutboxPending   = "pending"
-	OutboxSent      = "sent"
-	OutboxDelivered = "delivered"
-	OutboxRead      = "read"
-	OutboxFailed    = "failed"
-	OutboxExpired   = "expired"
+	StatusWaiting   = "waiting"
 )
 
 type Notification struct {
@@ -32,6 +28,7 @@ type Notification struct {
 	Read      bool           `gorm:"default:false;index" json:"read"`
 	CreatedAt time.Time      `gorm:"type:timestamptz;default:now();index" json:"created_at"`
 	UpdatedAt time.Time      `gorm:"type:timestamptz;default:now()" json:"updated_at"`
+	ExpiredAt time.Time      `gorm:"type:timestamptz;default:null"`
 }
 
 type OutboxEvent struct {
@@ -44,5 +41,7 @@ type OutboxEvent struct {
 	Priority       string            `gorm:"type:varchar(20);default:medium;index" json:"priority"`
 	Retries        int               `gorm:"default:0" json:"retries"`
 	CreatedAt      time.Time         `gorm:"default:now()" json:"created_at"`
-	SentAt         *time.Time        `json:"sent_at,omitempty"`
+	UpdatedAt      *time.Time        `json:"sent_at,omitempty"`
+	ExpiredAt      *time.Time        `json:"expired_at_at,omitempty"`
+	NeedToSync     bool              `gorm:"column:need_to_sync;default:false;index:idx_outbox_need_sync"`
 }

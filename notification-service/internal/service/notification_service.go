@@ -6,28 +6,25 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/moshdealer/notification-platform/notification-service/internal/model"
 	"github.com/moshdealer/notification-platform/notification-service/internal/nats"
 	"github.com/moshdealer/notification-platform/notification-service/internal/repository"
+	"github.com/moshdealer/notification-platform/pkg/model"
 )
 
 // NotificationService — бизнес-логика уведомлений
 type NotificationService struct {
 	repo      repository.NotificationRepository
 	publisher *nats.Publisher
-	//wsManager websocket.Manager
 }
 
 // NewNotificationService — конструктор (Dependency Injection)
 func NewNotificationService(
 	repo repository.NotificationRepository,
 	publisher *nats.Publisher,
-	// wsManager websocket.Manager,
 ) *NotificationService {
 	return &NotificationService{
 		repo:      repo,
 		publisher: publisher,
-		//wsManager: wsManager,
 	}
 }
 
@@ -41,17 +38,10 @@ func (s *NotificationService) Create(ctx context.Context, n *model.Notification,
 }
 
 // MarkAsRead — обратный поток (статус "прочитано")
-func (s *NotificationService) MarkAsRead(ctx context.Context, id uint, userID string) error {
-	if err := s.repo.MarkAsRead(ctx, id, userID); err != nil {
+func (s *NotificationService) MarkAsRead(ctx context.Context, id uint) error {
+	if err := s.repo.MarkAsRead(ctx, id); err != nil {
 		return err
 	}
-
-	readEvent := map[string]any{
-		"notification_id": id,
-		"user_id":         userID,
-		"read":            true,
-	}
-	fmt.Println(readEvent)
 	return nil
 }
 func (s *NotificationService) StartOutboxDispatcher(ctx context.Context) {

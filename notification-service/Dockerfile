@@ -5,15 +5,15 @@ WORKDIR /app
 
 RUN apk add --no-cache git
 
-# Копируем зависимости
-COPY go.mod go.sum ./
+#COPY go.work .
+COPY pkg ./pkg
+COPY notification-service ./notification-service
+
+WORKDIR /app/notification-service
+
 RUN go mod download
 
-# Копируем весь код сервиса
-COPY . .
-
-# Собираем
-RUN go build -o /app/notification-service ./cmd/app
+RUN go build -o /app/bin/notification-service ./cmd/app
 
 # -------- Stage 2: runtime --------
 FROM alpine:3.20
@@ -22,12 +22,10 @@ WORKDIR /app
 
 RUN apk add --no-cache ca-certificates
 
-# Копируем собранный бинарник
-COPY --from=builder /app/notification-service .
+COPY --from=builder /app/bin/notification-service ./notification-service
 
-# Копируем миграции (если они есть)
-COPY migrations ./migrations
-COPY configs ./configs
+COPY --from=builder /app/notification-service/migrations ./migrations
+COPY --from=builder /app/notification-service/configs ./configs
 
 EXPOSE 8080
 

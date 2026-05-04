@@ -6,17 +6,22 @@ import (
 	"gorm.io/gorm"
 	"time"
 
-	"github.com/moshdealer/notification-platform/notification-service/internal/model"
+	"github.com/moshdealer/notification-platform/pkg/model"
 )
 
 type NotificationRepository interface {
 	Create(ctx context.Context, n *model.Notification, e *model.OutboxEvent) error
 	GetByID(ctx context.Context, id uint) (*model.Notification, error)
-	MarkAsDelivered(ctx context.Context, id uint, userID string) error
-	MarkAsRead(ctx context.Context, id uint, userID string) error
+	MarkAsSent(ctx context.Context, id uint) error
+	MarkAsDelivered(ctx context.Context, id uint) error
+	MarkAsRead(ctx context.Context, id uint) error
 	MarkAsExpired(ctx context.Context, id uint) error
+	MarkAsWaiting(ctx context.Context, id uint) error
+	MarkAsFailed(ctx context.Context, id uint) error
 	GetPendingOutboxEvents(ctx context.Context, limit int) ([]model.OutboxEvent, error)
 	MarkOutboxAsSent(ctx context.Context, id uint) error
+	GetOutboxEventsForSync(ctx context.Context, limit int) ([]model.OutboxEvent, error)
+	MarkOutboxAsSynced(ctx context.Context, outboxID uint) error
 }
 
 type notificationRepo struct {
@@ -68,20 +73,30 @@ func (r *notificationRepo) GetByID(ctx context.Context, id uint) (*model.Notific
 	return &n, nil
 }
 
-func (r *notificationRepo) MarkAsDelivered(ctx context.Context, id uint, userID string) error {
+func (r *notificationRepo) MarkAsSent(ctx context.Context, id uint) error {
 	return r.db.WithContext(ctx).
 		Model(&model.Notification{}).
-		Where("id = ? AND user_id = ?", id, userID).
+		Where("id = ?", id).
+		Updates(map[string]any{
+			"status":     model.StatusSent,
+			"updated_at": time.Now(),
+		}).Error
+}
+
+func (r *notificationRepo) MarkAsDelivered(ctx context.Context, id uint) error {
+	return r.db.WithContext(ctx).
+		Model(&model.Notification{}).
+		Where("id = ?", id).
 		Updates(map[string]any{
 			"status":     model.StatusDelivered,
 			"updated_at": time.Now(),
 		}).Error
 }
 
-func (r *notificationRepo) MarkAsRead(ctx context.Context, id uint, userID string) error {
+func (r *notificationRepo) MarkAsRead(ctx context.Context, id uint) error {
 	return r.db.WithContext(ctx).
 		Model(&model.Notification{}).
-		Where("id = ? AND user_id = ?", id, userID).
+		Where("id = ?", id).
 		Updates(map[string]any{
 			"status":     model.StatusRead,
 			"read":       true,
@@ -99,12 +114,34 @@ func (r *notificationRepo) MarkAsExpired(ctx context.Context, id uint) error {
 		}).Error
 }
 
+func (r *notificationRepo) MarkAsFailed(ctx context.Context, id uint) error {
+	return r.db.WithContext(ctx).
+		Model(&model.Notification{}).
+		Where("id = ?", id).
+		Updates(map[string]any{
+			"status":     model.StatusFailed,
+			"updated_at": time.Now(),
+		}).Error
+}
+
+func (r *notificationRepo) MarkAsWaiting(ctx context.Context, id uint) error {
+	updates := map[string]any{
+		"status":     model.StatusWaiting,
+		"updated_at": time.Now(),
+	}
+
+	return r.db.WithContext(ctx).
+		Model(&model.Notification{}).
+		Where("id = ?", id).
+		Updates(updates).Error
+}
+
 // GetPendingOutboxEvents возвращает события, которые ещё не отправлены в NATS
 func (r *notificationRepo) GetPendingOutboxEvents(ctx context.Context, limit int) ([]model.OutboxEvent, error) {
 	var events []model.OutboxEvent
 
 	err := r.db.WithContext(ctx).
-		Where("status = ?", "pending").
+		Where("status = ?", model.StatusPending).
 		Order("created_at ASC").
 		Limit(limit).
 		Find(&events).Error
@@ -122,8 +159,9 @@ func (r *notificationRepo) MarkOutboxAsSent(ctx context.Context, id uint) error 
 		Model(&model.OutboxEvent{}).
 		Where("id = ?", id).
 		Updates(map[string]any{
-			"status":  model.OutboxSent,
-			"sent_at": time.Now(),
+			"status":       model.StatusSent,
+			"updated_at":   time.Now(),
+			"need_to_sync": true,
 		}).Error
 
 	if err != nil {
@@ -131,4 +169,26 @@ func (r *notificationRepo) MarkOutboxAsSent(ctx context.Context, id uint) error 
 	}
 
 	return nil
+}
+
+func (r *notificationRepo) GetOutboxEventsForSync(ctx context.Context, limit int) ([]model.OutboxEvent, error) {
+	var events []model.OutboxEvent
+
+	err := r.db.WithContext(ctx).
+		Where("need_to_sync = true").
+		Order("updated_at ASC").
+		Limit(limit).
+		Find(&events).Error
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get outbox events for sync: %w", err)
+	}
+	return events, nil
+}
+
+func (r *notificationRepo) MarkOutboxAsSynced(ctx context.Context, outboxID uint) error {
+	return r.db.WithContext(ctx).
+		Model(&model.OutboxEvent{}).
+		Where("id = ?", outboxID).
+		Update("need_to_sync", false).Error
 }

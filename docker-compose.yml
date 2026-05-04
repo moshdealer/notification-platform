@@ -1,7 +1,8 @@
 services:
   notification-service:
     build:
-      context: ./notification-service
+      context: .
+      dockerfile: ./notification-service/Dockerfile
     ports:
       - "8080:8080"
     depends_on:
@@ -13,6 +14,22 @@ services:
       - .env
     volumes:
       - ./notification-service/configs:/app/configs
+
+  ws-notifier:
+    build:
+      context: .
+      dockerfile: ./ws-notifier/Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      - SERVER_PORT=8081
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
 
   postgres:
     image: postgres:15

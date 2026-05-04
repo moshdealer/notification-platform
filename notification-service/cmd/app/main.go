@@ -13,30 +13,22 @@ import (
 
 	"github.com/moshdealer/notification-platform/notification-service/internal/handler"
 	"github.com/moshdealer/notification-platform/notification-service/internal/nats"
-	"github.com/moshdealer/notification-platform/notification-service/internal/redis"
 	"github.com/moshdealer/notification-platform/notification-service/internal/repository"
 	"github.com/moshdealer/notification-platform/notification-service/internal/router"
 	"github.com/moshdealer/notification-platform/notification-service/internal/service"
-	"github.com/moshdealer/notification-platform/notification-service/internal/websocket"
+	outbox "github.com/moshdealer/notification-platform/notification-service/internal/worker"
 	"github.com/moshdealer/notification-platform/pkg/config"
 	"github.com/moshdealer/notification-platform/pkg/database/db"
 )
 
-/*
-На текущий момент реализовано:
-1) Дергая Post /notifications, создаются записи в БД (само сообщение и event)
-2) NatsPublisher каждые 5 сек дергает таблицу Event и отправляет в Nats
-*/
-
 //TODO убрать ненужные комментарии
-// рефакторинг всего как будет работать
-// Redis конфиги
-// Redis тестирование
-// Redis разобраться с ключем (сейчас один ключ на все сообщения для юзера)
-// Разбор каждого модуля
 // Разбор того как мы шлем сообщение в итоге (отказаться от payload)
-// Логирование
 // Auth токены
+// под каждый сервис свой конфиг
+// Логирование
+// докер оптимизировать
+// рефакторинг всего как будет работать
+// Разбор каждого модуля
 
 type App struct {
 	Config              *config.Config
@@ -44,9 +36,7 @@ type App struct {
 	NotificationRepo    repository.NotificationRepository
 	NATSPublisher       *nats.Publisher
 	NotificationService *service.NotificationService
-	WSManager           *websocket.Manager
-	RedisClient         *redis.Client
-	NATSSubscriber      *nats.Subscriber
+	OutboxSyncer        *outbox.Syncer
 }
 
 func main() {
@@ -56,10 +46,16 @@ func main() {
 		_, _ = fmt.Fprintf(os.Stderr, "config load error: %v\n", err)
 		os.Exit(1)
 	}
+
 	// 2. Подключаем БД + миграции
-	dbConn, err := db.ConnectAndMigrate(&cfg.Database)
+	dbConn, err := db.Connect(&cfg.Database)
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "DB connect error: %v\n", err)
+		os.Exit(1)
+	}
+	err = db.Migrate(&cfg.Database)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Migrate error: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -69,39 +65,38 @@ func main() {
 		DB:     dbConn,
 	}
 
-	fmt.Println(app)
-
 	// 4. Репозитории
 	app.NotificationRepo = repository.NewNotificationRepository(app.DB)
 
+	// 5. NATS Publisher
 	app.NATSPublisher, err = nats.NewPublisher(&app.Config.NATS)
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "NATS Publisher connect error: %v\n", err)
 		os.Exit(1)
 	}
 
+	// 6. Сервис
 	app.NotificationService = service.NewNotificationService(app.NotificationRepo, app.NATSPublisher)
 
-	app.RedisClient = redis.NewClient(&cfg.Redis)
-	app.WSManager = websocket.NewManager()
-
-	app.NATSSubscriber = nats.NewSubscriber(&app.Config.NATS, app.WSManager, app.RedisClient)
+	// 7. Worker для синхронизации outbox
+	app.OutboxSyncer = outbox.NewSyncer(
+		app.NotificationRepo,
+		10*time.Second,
+		100,
+		&cfg.Redis,
+	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Запускаем outbox dispatcher (отправка событий в NATS)
 	go app.NotificationService.StartOutboxDispatcher(ctx)
-
-	if err := app.NATSSubscriber.Start(); err != nil {
-		log.Printf("NATS Subscriber start error: %v", err)
-	}
-	fmt.Println("NATS WebSocket Subscriber запущен")
+	go app.OutboxSyncer.Run(ctx)
 
 	// HTTP сервер
 	notificationHandler := handler.NewNotificationHandler(app.NotificationService)
-	wsHandler := websocket.NewHandler(app.WSManager, app.RedisClient)
 
-	r := router.New(notificationHandler, wsHandler)
+	r := router.New(notificationHandler)
 	engine := r.Setup()
 
 	srv := &http.Server{
@@ -116,7 +111,6 @@ func main() {
 	}()
 
 	fmt.Printf("Notification service started on http://localhost:%s\n", app.Config.Server.Port)
-	fmt.Println("WebSocket: ws://localhost:" + app.Config.Server.Port + "/ws?user_id=123&token=xxx")
 
 	<-ctx.Done()
 	fmt.Println("Shutting down...")
