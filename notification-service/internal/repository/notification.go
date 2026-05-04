@@ -16,6 +16,7 @@ type NotificationRepository interface {
 	MarkAsDelivered(ctx context.Context, id uint) error
 	MarkAsRead(ctx context.Context, id uint) error
 	MarkAsExpired(ctx context.Context, id uint) error
+	MarkAsWaiting(ctx context.Context, id uint) error
 	MarkAsFailed(ctx context.Context, id uint) error
 	GetPendingOutboxEvents(ctx context.Context, limit int) ([]model.OutboxEvent, error)
 	MarkOutboxAsSent(ctx context.Context, id uint) error
@@ -121,6 +122,18 @@ func (r *notificationRepo) MarkAsFailed(ctx context.Context, id uint) error {
 			"status":     model.StatusFailed,
 			"updated_at": time.Now(),
 		}).Error
+}
+
+func (r *notificationRepo) MarkAsWaiting(ctx context.Context, id uint) error {
+	updates := map[string]any{
+		"status":     model.StatusWaiting,
+		"updated_at": time.Now(),
+	}
+
+	return r.db.WithContext(ctx).
+		Model(&model.Notification{}).
+		Where("id = ?", id).
+		Updates(updates).Error
 }
 
 // GetPendingOutboxEvents возвращает события, которые ещё не отправлены в NATS

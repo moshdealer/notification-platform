@@ -30,7 +30,5 @@ func (r *Router) Setup() *gin.Engine {
 	// WebSocket endpoint
 	engine.GET("/ws", r.wsHandler.WebSocket)
 
-	// Можно добавить другие роуты позже (например /metrics, /status и т.д.)
-
 	return engine
 }

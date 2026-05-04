@@ -2,13 +2,14 @@ package nats
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/moshdealer/notification-platform/pkg/config"
+	"github.com/moshdealer/notification-platform/pkg/utils"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/redis"
-	"github.com/moshdealer/notification-platform/ws-notifier/internal/repository" // ← добавь
+	"github.com/moshdealer/notification-platform/ws-notifier/internal/repository"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/websocket"
 	"github.com/nats-io/nats.go"
 )
@@ -23,14 +24,14 @@ type Subscriber struct {
 	sub         *nats.Subscription
 	wsManager   *websocket.Manager
 	redisClient *redis.Client
-	repo        repository.OutBoxRepository // ← добавили
+	repo        repository.OutBoxRepository
 }
 
 func NewSubscriber(
 	cfg *config.NATSCfg,
 	wm *websocket.Manager,
 	rc *redis.Client,
-	repo repository.OutBoxRepository, // ← добавили
+	repo repository.OutBoxRepository,
 ) *Subscriber {
 	nc, err := nats.Connect(cfg.NATSAddr)
 	if err != nil {
@@ -49,27 +50,47 @@ func (s *Subscriber) Start() error {
 	sub, err := s.natsConn.QueueSubscribe("notifications.new.*", "notification-service-ws", func(msg *nats.Msg) {
 		userID := strings.TrimPrefix(msg.Subject, "notifications.new.")
 
-		// Извлекаем notification_id из сообщения
-		eventID := extractEventID(msg.Data)
+		eventID := utils.ExtractEventID(msg.Data)
+		priority := utils.ExtractPriority(msg.Data)
+
+		var ttl time.Duration
+		if priority == "high" {
+			ttl = redis.HighTTL
+		} else {
+			ttl = redis.DefaultTTL
+		}
 
 		if s.wsManager.HasActiveConnections(userID) {
 			// Пользователь онлайн — пытаемся отправить
 			if sendErr := s.wsManager.SendToUser(userID, msg.Data); sendErr == nil {
-				fmt.Println("Зашли в отправку ", sendErr)
 				// Успешно отправили
 				if err := s.repo.MarkAsDelivered(context.Background(), eventID); err != nil {
 					fmt.Printf("Failed to mark as sent %d: %v\n", eventID, err)
 				}
 			} else {
-				// Не удалось отправить (хотя был онлайн) — сохраняем в Redis
+				// Не удалось отправить - сохраняем в Redis
 				if addErr := s.redisClient.AddUnread(context.Background(), userID, msg.Data); addErr != nil {
 					fmt.Printf("Failed to save to Redis: %v\n", addErr)
+					if err := s.repo.MarkAsFailed(context.Background(), eventID); err != nil {
+						fmt.Printf("Failed to mark as failed %d: %v\n", eventID, err)
+					}
+				} else {
+					if err := s.repo.MarkAsWaiting(context.Background(), eventID, ttl); err != nil {
+						fmt.Printf("Failed to mark as waiting %d: %v\n", eventID, err)
+					}
 				}
 			}
 		} else {
-			// Пользователь оффлайн — сразу в Redis
+			// Пользователь оффлайн - сразу в Redis
 			if addErr := s.redisClient.AddUnread(context.Background(), userID, msg.Data); addErr != nil {
 				fmt.Printf("Failed to save to Redis: %v\n", addErr)
+				if err := s.repo.MarkAsFailed(context.Background(), eventID); err != nil {
+					fmt.Printf("Failed to mark as failed %d: %v\n", eventID, err)
+				}
+			} else {
+				if err := s.repo.MarkAsWaiting(context.Background(), eventID, ttl); err != nil {
+					fmt.Printf("Failed to mark as waiting %d: %v\n", eventID, err)
+				}
 			}
 		}
 	})
@@ -92,24 +113,4 @@ func (s *Subscriber) Close() {
 		s.natsConn = nil
 	}
 	fmt.Println("NATS Subscriber closed")
-}
-
-// TODO убрать дубль в хэндлере
-func extractEventID(data []byte) uint {
-	type outer struct {
-		EventID uint `json:"event_id"`
-	}
-
-	var o outer
-	if err := json.Unmarshal(data, &o); err != nil {
-		fmt.Printf("ERROR: failed to parse event_id. Raw: %s\n", string(data))
-		return 0
-	}
-
-	if o.EventID != 0 {
-		return o.EventID
-	}
-
-	fmt.Printf("WARNING: event_id not found or zero in message: %s\n", string(data))
-	return 0
 }

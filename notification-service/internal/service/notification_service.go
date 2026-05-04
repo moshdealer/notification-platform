@@ -15,19 +15,16 @@ import (
 type NotificationService struct {
 	repo      repository.NotificationRepository
 	publisher *nats.Publisher
-	//wsManager websocket.Manager
 }
 
 // NewNotificationService — конструктор (Dependency Injection)
 func NewNotificationService(
 	repo repository.NotificationRepository,
 	publisher *nats.Publisher,
-	// wsManager websocket.Manager,
 ) *NotificationService {
 	return &NotificationService{
 		repo:      repo,
 		publisher: publisher,
-		//wsManager: wsManager,
 	}
 }
 
@@ -45,12 +42,6 @@ func (s *NotificationService) MarkAsRead(ctx context.Context, id uint) error {
 	if err := s.repo.MarkAsRead(ctx, id); err != nil {
 		return err
 	}
-
-	readEvent := map[string]any{
-		"notification_id": id,
-		"read":            true,
-	}
-	fmt.Println(readEvent)
 	return nil
 }
 func (s *NotificationService) StartOutboxDispatcher(ctx context.Context) {

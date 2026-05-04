@@ -39,7 +39,7 @@ func Connect(dbCfg *config.DatabaseCfg) (*gorm.DB, error) {
 	if err := sqlDB.Ping(); err != nil {
 		return nil, fmt.Errorf("failed to ping DB: %w", err)
 	}
-
+	
 	log.Println("Successfully connected to PostgreSQL")
 	return db, nil
 }

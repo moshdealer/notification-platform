@@ -22,16 +22,16 @@
     }
 
     ws.onopen = () => {
-        write("✅ WebSocket подключён");
+        write("WebSocket подключён");
         write(`UserID: ${userId}`);
     };
 
     ws.onmessage = (event) => {
-        write("📩 Получено: " + event.data);
+        write("Получено: " + event.data);
     };
 
-    ws.onclose = () => write("❌ WebSocket закрыт");
-    ws.onerror = (err) => write("🚨 Ошибка: " + err);
+    ws.onclose = () => write("WebSocket закрыт");
+    ws.onerror = (err) => write("Ошибка: " + err);
 </script>
 </body>
 </html>

@@ -10,6 +10,5 @@ type CreateNotificationRequest struct {
 }
 
 type MarkAsReadRequest struct {
-	ID     uint   `json:"id" binding:"required"`
-	UserID string `json:"user_id" binding:"required"`
+	ID uint `json:"id" binding:"required"`
 }

@@ -1,12 +1,12 @@
 package websocket
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/moshdealer/notification-platform/pkg/utils"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/redis"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/repository"
 )
@@ -47,7 +47,6 @@ func (h *Handler) WebSocket(c *gin.Context) {
 
 	h.wsManager.Register(userID, conn)
 
-	// Приветственное сообщение
 	if err = h.wsManager.SendToUser(userID, []byte(`{"type":"connected"}`)); err != nil {
 		fmt.Println("Failed to send message: ", err)
 	}
@@ -58,7 +57,7 @@ func (h *Handler) WebSocket(c *gin.Context) {
 	unread, err := h.redisClient.GetUnread(ctx, userID)
 	if err == nil && len(unread) > 0 {
 		for _, data := range unread {
-			eventID := extractEventID(data)
+			eventID := utils.ExtractEventID(data)
 
 			if sendErr := h.wsManager.SendToUser(userID, data); sendErr == nil {
 				// Успешно отправили
@@ -79,24 +78,4 @@ func (h *Handler) WebSocket(c *gin.Context) {
 
 func (h *Handler) validateToken(token, userID string) bool {
 	return token != "" // заглушка
-}
-
-// В nats/subscriber.go и в websocket/handler.go (можно вынести в общий utils)
-func extractEventID(data []byte) uint {
-	type outer struct {
-		EventID uint `json:"event_id"`
-	}
-
-	var o outer
-	if err := json.Unmarshal(data, &o); err != nil {
-		fmt.Printf("ERROR: failed to parse event_id. Raw: %s\n", string(data))
-		return 0
-	}
-
-	if o.EventID != 0 {
-		return o.EventID
-	}
-
-	fmt.Printf("WARNING: event_id not found or zero in message: %s\n", string(data))
-	return 0
 }

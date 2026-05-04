@@ -11,7 +11,7 @@ type Client struct {
 	conn   *websocket.Conn
 	userID string
 	send   chan []byte
-	once   sync.Once // защищает от двойного close
+	once   sync.Once
 }
 
 type Manager struct {
@@ -40,7 +40,7 @@ func (m *Manager) Register(userID string, conn *websocket.Conn) *Client {
 	m.mu.Unlock()
 
 	go client.writePump(m)
-	go client.readPump(m) // для быстрого определения disconnect
+	go client.readPump(m)
 
 	fmt.Printf("[WS] User %s connected\n", userID)
 	return client
@@ -58,7 +58,6 @@ func (m *Manager) Unregister(userID string, c *Client) {
 		}
 	}
 
-	// Безопасное закрытие канала
 	c.once.Do(func() {
 		close(c.send)
 	})
@@ -79,7 +78,6 @@ func (m *Manager) SendToUser(userID string, data []byte) error {
 		select {
 		case client.send <- data:
 			lastErr = nil
-			// успешно
 		default:
 			lastErr = fmt.Errorf("send channel full or closed")
 			go m.Unregister(userID, client)
@@ -117,7 +115,6 @@ func (c *Client) writePump(m *Manager) {
 	}
 }
 
-// CloseAll gracefully closes all active WebSocket connections
 func (m *Manager) CloseAll() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -127,12 +124,12 @@ func (m *Manager) CloseAll() {
 			client.once.Do(func() {
 				close(client.send)
 			})
-			client.conn.Close() // ← правильный доступ
+			client.conn.Close()
 		}
 		delete(m.clients, userID)
 	}
 
-	m.clients = make(map[string]map[*Client]bool) // очищаем мапу
+	m.clients = make(map[string]map[*Client]bool)
 
 	fmt.Println("[WS] All WebSocket connections closed")
 }

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	outbox "github.com/moshdealer/notification-platform/notification-service/internal/worker"
 	"gorm.io/gorm"
 	"log"
 	"net/http"
@@ -17,27 +16,19 @@ import (
 	"github.com/moshdealer/notification-platform/notification-service/internal/repository"
 	"github.com/moshdealer/notification-platform/notification-service/internal/router"
 	"github.com/moshdealer/notification-platform/notification-service/internal/service"
+	outbox "github.com/moshdealer/notification-platform/notification-service/internal/worker"
 	"github.com/moshdealer/notification-platform/pkg/config"
 	"github.com/moshdealer/notification-platform/pkg/database/db"
 )
 
-/*
-На текущий момент реализовано:
-1) Дергая Post /notifications, создаются записи в БД (само сообщение и event)
-2) NatsPublisher каждые 5 сек дергает таблицу Event и отправляет в Nats
-*/
-
 //TODO убрать ненужные комментарии
-// рефакторинг всего как будет работать
-// Redis конфиги
-// Redis тестирование
-// Redis разобраться с ключем (сейчас один ключ на все сообщения для юзера)
-// Разбор каждого модуля
 // Разбор того как мы шлем сообщение в итоге (отказаться от payload)
-// Логирование
 // Auth токены
 // под каждый сервис свой конфиг
+// Логирование
 // докер оптимизировать
+// рефакторинг всего как будет работать
+// Разбор каждого модуля
 
 type App struct {
 	Config              *config.Config
@@ -87,11 +78,12 @@ func main() {
 	// 6. Сервис
 	app.NotificationService = service.NewNotificationService(app.NotificationRepo, app.NATSPublisher)
 
-	// === Worker для синхронизации outbox → notifications ===
+	// 7. Worker для синхронизации outbox
 	app.OutboxSyncer = outbox.NewSyncer(
 		app.NotificationRepo,
-		10*time.Second, // interval
-		100,            // batch size
+		10*time.Second,
+		100,
+		&cfg.Redis,
 	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -104,7 +96,7 @@ func main() {
 	// HTTP сервер
 	notificationHandler := handler.NewNotificationHandler(app.NotificationService)
 
-	r := router.New(notificationHandler) // ← теперь без wsHandler
+	r := router.New(notificationHandler)
 	engine := r.Setup()
 
 	srv := &http.Server{

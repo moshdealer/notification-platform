@@ -51,7 +51,7 @@ func (p *Publisher) Publish(ctx context.Context, userId string, payload interfac
 	return nil
 }
 
-// Close закрывает соединение (вызывается при shutdown)
+// Close закрывает соединение
 func (p *Publisher) Close() {
 	if p.conn != nil {
 		p.conn.Close()

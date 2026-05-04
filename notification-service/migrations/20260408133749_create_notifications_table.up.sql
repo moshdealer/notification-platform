@@ -7,9 +7,10 @@ CREATE TABLE IF NOT EXISTS notifications (
     priority VARCHAR(10) CHECK (priority IN ('low', 'medium', 'high')),
     data JSONB,
     read BOOLEAN DEFAULT FALSE,
-    status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'delivered', 'read', 'failed', 'expired')),
+    status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'delivered', 'read', 'failed', 'expired', 'waiting')),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    expired_at TIMESTAMP WITH TIME ZONE NULL
     );
 
 CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
@@ -24,10 +25,11 @@ CREATE TABLE outbox_events (
     topic VARCHAR(255) NOT NULL,
     payload JSONB NOT NULL,
     priority VARCHAR(10) CHECK (priority IN ('low', 'medium', 'high')),
-    status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'delivered', 'read', 'failed', 'expired')),
+    status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'delivered', 'read', 'failed', 'expired', 'waiting')),
     retries INT NOT NULL DEFAULT 0,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NULL,
+    expired_at TIMESTAMP NULL,
     need_to_sync BOOLEAN DEFAULT FALSE
 );
 
@@ -48,3 +50,29 @@ CREATE TRIGGER trigger_notifications_updated_at
     BEFORE UPDATE ON notifications
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
+
+CREATE OR REPLACE FUNCTION sync_expired_at_to_notification()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'UPDATE' AND (OLD.expired_at IS DISTINCT FROM NEW.expired_at) THEN
+
+UPDATE notifications
+SET expired_at = NEW.expired_at,
+    updated_at  = NOW()
+WHERE id = NEW.notification_id
+  AND expired_at IS DISTINCT FROM NEW.expired_at;
+
+END IF;
+
+RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+
+DROP TRIGGER IF EXISTS trigger_sync_expired_at_to_notification ON outbox_events;
+
+
+CREATE TRIGGER trigger_sync_expired_at_to_notification
+    AFTER UPDATE OF expired_at ON outbox_events
+    FOR EACH ROW
+    EXECUTE FUNCTION sync_expired_at_to_notification();

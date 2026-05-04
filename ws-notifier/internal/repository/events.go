@@ -16,6 +16,7 @@ type OutBoxRepository interface {
 	MarkAsRead(ctx context.Context, id uint) error
 	MarkAsExpired(ctx context.Context, id uint) error
 	MarkAsFailed(ctx context.Context, id uint) error
+	MarkAsWaiting(ctx context.Context, id uint, ttl time.Duration) error
 	//GetPendingOutboxEvents(ctx context.Context, limit int) ([]model.OutboxEvent, error)
 	//MarkOutboxAsSent(ctx context.Context, id uint) error
 	//GetOutboxEventsForSync(ctx context.Context, limit int) ([]model.OutboxEvent, error)
@@ -126,6 +127,27 @@ func (r *outboxRepo) MarkAsFailed(ctx context.Context, id uint) error {
 			"updated_at":   time.Now(),
 			"need_to_sync": true,
 		}).Error
+}
+
+func (r *outboxRepo) MarkAsWaiting(ctx context.Context, id uint, ttl time.Duration) error {
+	now := time.Now()
+
+	updates := map[string]any{
+		"status":     model.StatusWaiting,
+		"updated_at": now,
+	}
+
+	if ttl > 0 {
+		updates["expired_at"] = now.Add(ttl)
+	} else {
+		// Для high-priority — никогда не истекает
+		updates["expired_at"] = nil
+	}
+
+	return r.db.WithContext(ctx).
+		Model(&model.OutboxEvent{}).
+		Where("id = ?", id).
+		Updates(updates).Error
 }
 
 /*

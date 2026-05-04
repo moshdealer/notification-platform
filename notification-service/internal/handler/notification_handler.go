@@ -4,7 +4,6 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-
 	"github.com/moshdealer/notification-platform/notification-service/internal/service"
 	"github.com/moshdealer/notification-platform/pkg/model"
 )
@@ -27,7 +26,6 @@ func (h *NotificationHandler) Create(c *gin.Context) {
 		return
 	}
 
-	// маппинг DTO → model
 	notification := &model.Notification{
 		UserID:   req.UserID,
 		Title:    req.Title,

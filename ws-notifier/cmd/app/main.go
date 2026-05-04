@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"github.com/moshdealer/notification-platform/pkg/config"
-	"github.com/moshdealer/notification-platform/ws-notifier/internal/nats" // subscriber
+	"github.com/moshdealer/notification-platform/ws-notifier/internal/nats"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/redis"
-	"github.com/moshdealer/notification-platform/ws-notifier/internal/websocket" // manager
+	"github.com/moshdealer/notification-platform/ws-notifier/internal/websocket"
 )
 
 /*
@@ -26,7 +26,6 @@ WS-Notifier - сервис для обработки WebSocket соединен�
 
 //TODO
 // - Redis конфиги и тестирование
-// - Разбор ключа в Redis (сейчас один ключ на все сообщения пользователя)
 // - Auth / token validation
 // - Connection limits / rate limiting
 // - Graceful shutdown для всех клиентов
@@ -60,15 +59,11 @@ func main() {
 		_, _ = fmt.Fprintf(os.Stderr, "DB connect error: %v\n", err)
 		os.Exit(1)
 	}
-	
+
 	app.OutBoxRepo = repository.NewOutBoxRepository(dbConn) // твой репозиторий
 
 	// 2. Redis
 	app.RedisClient = redis.NewClient(&cfg.Redis)
-	/*	if err := app.RedisClient.Ping(context.Background()).Err(); err != nil {
-		log.Printf("Redis connection error: %v", err)
-		// os.Exit(1)
-	}*/
 
 	// 3. WebSocket Manager
 	app.WSManager = websocket.NewManager()

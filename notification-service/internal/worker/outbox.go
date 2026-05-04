@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/moshdealer/notification-platform/notification-service/internal/repository"
+	"github.com/moshdealer/notification-platform/pkg/config"
 	"github.com/moshdealer/notification-platform/pkg/model"
 )
 
@@ -16,7 +17,7 @@ type Syncer struct {
 	batchSize int
 }
 
-func NewSyncer(repo repository.NotificationRepository, interval time.Duration, batchSize int) *Syncer {
+func NewSyncer(repo repository.NotificationRepository, interval time.Duration, batchSize int, cfg *config.RedisCfg) *Syncer {
 	if interval == 0 {
 		interval = 5 * time.Second
 	}
@@ -70,26 +71,28 @@ func (s *Syncer) syncBatch() {
 		case model.StatusSent: // в зависимости от твоих констант
 			err = s.repo.MarkAsSent(context.Background(), *event.NotificationID)
 
-		case model.StatusDelivered: // в зависимости от твоих констант
+		case model.StatusDelivered:
 			err = s.repo.MarkAsDelivered(context.Background(), *event.NotificationID)
 
 		case model.StatusRead: // в зависимости от твоих констант
 			err = s.repo.MarkAsRead(context.Background(), *event.NotificationID)
 
 		case model.StatusFailed:
-			err = s.repo.MarkAsFailed(context.Background(), *event.NotificationID) // или отдельный метод
-		// если хочешь MarkAsFailed — добавишь позже
+			err = s.repo.MarkAsFailed(context.Background(), *event.NotificationID)
 
 		case model.StatusExpired: // в зависимости от твоих констант
 			err = s.repo.MarkAsExpired(context.Background(), *event.NotificationID)
+
+		case model.StatusWaiting:
+			err = s.repo.MarkAsWaiting(context.Background(), *event.NotificationID)
+
 		}
 
 		if err != nil {
 			log.Printf("[OutboxSyncer] failed to sync notification %d: %v", *event.NotificationID, err)
 			continue
 		}
-
-		// Снимаем флаг need_to_sync через repo
+		
 		if markErr := s.repo.MarkOutboxAsSynced(context.Background(), event.ID); markErr != nil {
 			log.Printf("[OutboxSyncer] failed to mark as synced %d: %v", event.ID, markErr)
 		} else {
