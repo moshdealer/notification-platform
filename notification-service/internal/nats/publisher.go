@@ -8,35 +8,40 @@ import (
 
 	"github.com/moshdealer/notification-platform/pkg/config"
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
-// Publisher отвечает за отправку событий в NATS
 type Publisher struct {
-	conn    *nats.Conn
+	js      jetstream.JetStream
 	subject string
 }
 
-// NewPublisher создаёт и подключает publisher
 func NewPublisher(cfg *config.NATSCfg) (*Publisher, error) {
-	conn, err := nats.Connect(
+	nc, err := nats.Connect(
 		cfg.NATSAddr,
 		nats.Name("notification-publisher"),
 		nats.MaxReconnects(-1),
 		nats.ReconnectWait(2*time.Second),
+		nats.Timeout(10*time.Second),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to NATS at %s: %w", cfg.NATSAddr, err)
+		return nil, fmt.Errorf("failed to connect to NATS: %w", err)
 	}
 
-	fmt.Printf("NATS Publisher connected to %s\n", cfg.NATSAddr)
+	js, err := jetstream.New(nc)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create JetStream context: %w", err)
+	}
+
+	fmt.Printf("NATS JetStream Publisher connected to %s\n", cfg.NATSAddr)
 
 	return &Publisher{
-		conn:    conn,
+		js:      js,
 		subject: cfg.SubjectNew,
 	}, nil
 }
 
-// Publish отправляет любое событие в NATS
+// Publish отправляет уведомление и ждёт подтверждения от JetStream
 func (p *Publisher) Publish(ctx context.Context, userId string, payload interface{}) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -44,17 +49,20 @@ func (p *Publisher) Publish(ctx context.Context, userId string, payload interfac
 	}
 
 	subject := fmt.Sprintf("%s.%s", p.subject, userId)
-	if err := p.conn.Publish(subject, data); err != nil {
-		return fmt.Errorf("failed to publish to subject %s: %w", p.subject, err)
+
+	// Publish с ожиданием Ack от стрима
+	_, err = p.js.Publish(ctx, subject, data, jetstream.WithMsgID(fmt.Sprintf("notif-%d", time.Now().UnixNano())))
+	if err != nil {
+		return fmt.Errorf("failed to publish to %s: %w", subject, err)
 	}
 
 	return nil
 }
 
-// Close закрывает соединение
+func (p *Publisher) GetJetStream() jetstream.JetStream {
+	return p.js
+}
+
 func (p *Publisher) Close() {
-	if p.conn != nil {
-		p.conn.Close()
-		fmt.Println("NATS Publisher connection closed")
-	}
+	fmt.Println("NATS JetStream Publisher closed")
 }

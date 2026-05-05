@@ -12,19 +12,18 @@ import (
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/repository"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/websocket"
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
-type Notification struct {
-	NotificationID uint   `json:"notification_id"`
-	UserID         string `json:"user_id"`
-}
-
 type Subscriber struct {
-	natsConn    *nats.Conn
-	sub         *nats.Subscription
-	wsManager   *websocket.Manager
-	redisClient *redis.Client
-	repo        repository.OutBoxRepository
+	nc               *nats.Conn
+	js               jetstream.JetStream
+	cons             jetstream.ConsumeContext
+	wsManager        *websocket.Manager
+	redisClient      *redis.Client
+	repo             repository.OutBoxRepository
+	streamName       string
+	filterStreamName string
 }
 
 func NewSubscriber(
@@ -32,26 +31,59 @@ func NewSubscriber(
 	wm *websocket.Manager,
 	rc *redis.Client,
 	repo repository.OutBoxRepository,
-) *Subscriber {
-	nc, err := nats.Connect(cfg.NATSAddr)
+) (*Subscriber, error) {
+	nc, err := nats.Connect(cfg.NATSAddr,
+		nats.Name("ws-notifier-subscriber"),
+		nats.MaxReconnects(-1),
+	)
 	if err != nil {
-		panic("NATS Subscriber connect error: " + err.Error())
+		return nil, fmt.Errorf("NATS connect error: %w", err)
 	}
 
-	return &Subscriber{
-		natsConn:    nc,
-		wsManager:   wm,
-		redisClient: rc,
-		repo:        repo,
+	js, err := jetstream.New(nc)
+	if err != nil {
+		return nil, fmt.Errorf("JetStream init error: %w", err)
 	}
+
+	filterStreamName := fmt.Sprintf("%v.>", cfg.SubjectNew)
+
+	return &Subscriber{
+		nc:               nc,
+		js:               js,
+		wsManager:        wm,
+		redisClient:      rc,
+		repo:             repo,
+		streamName:       cfg.SubjectNew,
+		filterStreamName: filterStreamName,
+	}, nil
 }
 
 func (s *Subscriber) Start() error {
-	sub, err := s.natsConn.QueueSubscribe("notifications.new.*", "notification-service-ws", func(msg *nats.Msg) {
-		userID := strings.TrimPrefix(msg.Subject, "notifications.new.")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-		eventID := utils.ExtractEventID(msg.Data)
-		priority := utils.ExtractPriority(msg.Data)
+	consumer, err := s.js.CreateOrUpdateConsumer(ctx, s.streamName, jetstream.ConsumerConfig{
+		Durable:       "notification-service-ws",
+		AckPolicy:     jetstream.AckExplicitPolicy,
+		MaxDeliver:    30,
+		AckWait:       60 * time.Second,
+		FilterSubject: s.filterStreamName,
+		BackOff: []time.Duration{
+			1 * time.Second,
+			5 * time.Second,
+			10 * time.Second,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create consumer: %w", err)
+	}
+
+	consumeCtx, err := consumer.Consume(func(msg jetstream.Msg) {
+
+		userID := strings.TrimPrefix(msg.Subject(), fmt.Sprintf("%v.", s.streamName))
+
+		eventID := utils.ExtractEventID(msg.Data())
+		priority := utils.ExtractPriority(msg.Data())
 
 		var ttl time.Duration
 		if priority == "high" {
@@ -61,56 +93,50 @@ func (s *Subscriber) Start() error {
 		}
 
 		if s.wsManager.HasActiveConnections(userID) {
-			// Пользователь онлайн — пытаемся отправить
-			if sendErr := s.wsManager.SendToUser(userID, msg.Data); sendErr == nil {
-				// Успешно отправили
+			if sendErr := s.wsManager.SendToUser(userID, msg.Data()); sendErr == nil {
+				// Успешно отправили онлайн
 				if err := s.repo.MarkAsDelivered(context.Background(), eventID); err != nil {
-					fmt.Printf("Failed to mark as sent %d: %v\n", eventID, err)
+					fmt.Printf("Failed to mark as delivered %d: %v\n", eventID, err)
 				}
-			} else {
-				// Не удалось отправить - сохраняем в Redis
-				if addErr := s.redisClient.AddUnread(context.Background(), userID, msg.Data); addErr != nil {
-					fmt.Printf("Failed to save to Redis: %v\n", addErr)
-					if err := s.repo.MarkAsFailed(context.Background(), eventID); err != nil {
-						fmt.Printf("Failed to mark as failed %d: %v\n", eventID, err)
-					}
-				} else {
-					if err := s.repo.MarkAsWaiting(context.Background(), eventID, ttl); err != nil {
-						fmt.Printf("Failed to mark as waiting %d: %v\n", eventID, err)
-					}
-				}
-			}
-		} else {
-			// Пользователь оффлайн - сразу в Redis
-			if addErr := s.redisClient.AddUnread(context.Background(), userID, msg.Data); addErr != nil {
-				fmt.Printf("Failed to save to Redis: %v\n", addErr)
-				if err := s.repo.MarkAsFailed(context.Background(), eventID); err != nil {
-					fmt.Printf("Failed to mark as failed %d: %v\n", eventID, err)
-				}
-			} else {
-				if err := s.repo.MarkAsWaiting(context.Background(), eventID, ttl); err != nil {
-					fmt.Printf("Failed to mark as waiting %d: %v\n", eventID, err)
-				}
+				msg.Ack()
+				return
 			}
 		}
+
+		// Если юзер офлайн
+		if addErr := s.redisClient.AddUnread(context.Background(), userID, msg.Data()); addErr != nil {
+			fmt.Printf("Failed to save to Redis for user %s: %v\n", userID, addErr)
+			if err := s.repo.MarkAsFailed(context.Background(), eventID); err != nil {
+				fmt.Printf("Failed to mark as failed %d: %v\n", eventID, err)
+			}
+			msg.NakWithDelay(time.Second * 15)
+			return
+		}
+
+		// Успешно сохранили в Redis
+		if err := s.repo.MarkAsWaiting(context.Background(), eventID, ttl); err != nil {
+			fmt.Printf("Failed to mark as waiting %d: %v\n", eventID, err)
+		}
+
+		msg.Ack()
 	})
 
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to start consumer: %w", err)
 	}
 
-	s.sub = sub
+	s.cons = consumeCtx
+	fmt.Println("NATS JetStream Subscriber started (WorkQueue + Redis fallback)")
 	return nil
 }
 
 func (s *Subscriber) Close() {
-	if s.sub != nil {
-		_ = s.sub.Unsubscribe()
-		s.sub = nil
+	if s.cons != nil {
+		s.cons.Stop()
+		s.cons = nil
 	}
-	if s.natsConn != nil {
-		s.natsConn.Close()
-		s.natsConn = nil
+	if s.nc != nil {
+		s.nc.Close()
 	}
-	fmt.Println("NATS Subscriber closed")
+	fmt.Println("NATS JetStream Subscriber closed")
 }

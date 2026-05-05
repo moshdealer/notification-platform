@@ -31,11 +31,10 @@ WS-Notifier - сервис для обработки WebSocket соединен�
 // - Graceful shutdown для всех клиентов
 // - Prometheus metrics (кол-во подключённых пользователей)
 // - Логирование
-// под каждый сервис свой конфиг
 // докер оптимизировать
 
 type App struct {
-	Config         *config.Config
+	Config         *config.ConfigWSNotifier
 	RedisClient    *redis.Client
 	WSManager      *websocket.Manager
 	NATSSubscriber *nats.Subscriber
@@ -44,7 +43,7 @@ type App struct {
 
 func main() {
 	// 1. Загружаем конфиг
-	cfg, err := config.Load()
+	cfg, err := config.LoadWSNotifier()
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "config load error: %v\n", err)
 		os.Exit(1)
@@ -69,7 +68,7 @@ func main() {
 	app.WSManager = websocket.NewManager()
 
 	// 4. NATS Subscriber (слушает уведомления и раздаёт по WS)
-	app.NATSSubscriber = nats.NewSubscriber(&app.Config.NATS, app.WSManager, app.RedisClient, app.OutBoxRepo)
+	app.NATSSubscriber, err = nats.NewSubscriber(&app.Config.NATS, app.WSManager, app.RedisClient, app.OutBoxRepo)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

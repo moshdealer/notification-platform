@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/moshdealer/notification-platform/notification-service/internal/repository"
-	"github.com/moshdealer/notification-platform/pkg/config"
 	"github.com/moshdealer/notification-platform/pkg/model"
 )
 
@@ -17,7 +16,7 @@ type Syncer struct {
 	batchSize int
 }
 
-func NewSyncer(repo repository.NotificationRepository, interval time.Duration, batchSize int, cfg *config.RedisCfg) *Syncer {
+func NewSyncer(repo repository.NotificationRepository, interval time.Duration, batchSize int) *Syncer {
 	if interval == 0 {
 		interval = 5 * time.Second
 	}
@@ -92,7 +91,7 @@ func (s *Syncer) syncBatch() {
 			log.Printf("[OutboxSyncer] failed to sync notification %d: %v", *event.NotificationID, err)
 			continue
 		}
-		
+
 		if markErr := s.repo.MarkOutboxAsSynced(context.Background(), event.ID); markErr != nil {
 			log.Printf("[OutboxSyncer] failed to mark as synced %d: %v", event.ID, markErr)
 		} else {
