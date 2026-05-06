@@ -28,6 +28,7 @@ import (
 // докер оптимизировать
 // рефакторинг всего как будет работать
 // Разбор каждого модуля
+// Просмотр ссылок и переменных
 
 type App struct {
 	Config              *config.ConfigNotificationService

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/moshdealer/notification-platform/pkg/model"
 	"time"
 
 	"github.com/moshdealer/notification-platform/pkg/config"
@@ -42,8 +43,8 @@ func NewPublisher(cfg *config.NATSCfg) (*Publisher, error) {
 }
 
 // Publish отправляет уведомление и ждёт подтверждения от JetStream
-func (p *Publisher) Publish(ctx context.Context, userId string, payload interface{}) error {
-	data, err := json.Marshal(payload)
+func (p *Publisher) Publish(ctx context.Context, userId string, message model.NatsMessage) error {
+	data, err := json.Marshal(message)
 	if err != nil {
 		return fmt.Errorf("failed to marshal payload: %w", err)
 	}

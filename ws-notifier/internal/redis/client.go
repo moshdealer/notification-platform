@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/moshdealer/notification-platform/pkg/model"
 	"time"
 
 	"github.com/moshdealer/notification-platform/pkg/config"
@@ -47,12 +48,7 @@ func (c *Client) AddUnread(ctx context.Context, userID string, data []byte) erro
 		return nil
 	}
 
-	var notificationPayload struct {
-		EventID int `json:"event_id"`
-		Payload struct {
-			Priority string `json:"priority"`
-		} `json:"payload"`
-	}
+	notificationPayload := model.NatsMessage{}
 
 	if err := json.Unmarshal(data, &notificationPayload); err != nil || notificationPayload.EventID == 0 {
 		return c.rdb.Set(ctx, fmt.Sprintf("user:%s:unread:fallback:%d", userID, time.Now().UnixNano()), data, TestTTL).Err()

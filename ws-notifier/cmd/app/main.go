@@ -3,9 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/moshdealer/notification-platform/pkg/database/db"
-	"github.com/moshdealer/notification-platform/ws-notifier/internal/repository"
-	"github.com/moshdealer/notification-platform/ws-notifier/internal/router"
 	"log"
 	"net/http"
 	"os"
@@ -14,8 +11,11 @@ import (
 	"time"
 
 	"github.com/moshdealer/notification-platform/pkg/config"
+	"github.com/moshdealer/notification-platform/pkg/database/db"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/nats"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/redis"
+	"github.com/moshdealer/notification-platform/ws-notifier/internal/repository"
+	"github.com/moshdealer/notification-platform/ws-notifier/internal/router"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/websocket"
 )
 
@@ -25,7 +25,6 @@ WS-Notifier - сервис для обработки WebSocket соединен�
 */
 
 //TODO
-// - Redis конфиги и тестирование
 // - Auth / token validation
 // - Connection limits / rate limiting
 // - Graceful shutdown для всех клиентов

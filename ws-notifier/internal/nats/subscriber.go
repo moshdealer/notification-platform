@@ -2,12 +2,13 @@ package nats
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"strings"
+	"log"
 	"time"
 
 	"github.com/moshdealer/notification-platform/pkg/config"
-	"github.com/moshdealer/notification-platform/pkg/utils"
+	"github.com/moshdealer/notification-platform/pkg/model"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/redis"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/repository"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/websocket"
@@ -80,10 +81,16 @@ func (s *Subscriber) Start() error {
 
 	consumeCtx, err := consumer.Consume(func(msg jetstream.Msg) {
 
-		userID := strings.TrimPrefix(msg.Subject(), fmt.Sprintf("%v.", s.streamName))
+		natsMessage := model.NatsMessage{}
+		if err := json.Unmarshal(msg.Data(), &natsMessage); err != nil {
+			log.Printf("Failed to unmarshal NatsEvent: %v", err)
+			msg.Nak()
+			return
+		}
 
-		eventID := utils.ExtractEventID(msg.Data())
-		priority := utils.ExtractPriority(msg.Data())
+		userID := natsMessage.Payload.UserID
+		priority := natsMessage.Payload.Priority
+		eventID := natsMessage.EventID
 
 		var ttl time.Duration
 		if priority == "high" {
