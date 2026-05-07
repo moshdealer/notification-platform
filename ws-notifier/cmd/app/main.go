@@ -25,12 +25,11 @@ WS-Notifier - сервис для обработки WebSocket соединен�
 */
 
 //TODO
-// - Auth / token validation
-// - Connection limits / rate limiting
-// - Graceful shutdown для всех клиентов
-// - Prometheus metrics (кол-во подключённых пользователей)
+// - Auth
+// - Graceful shutdown для всех
+// - Prometheus metrics попробовать накинуть
 // - Логирование
-// докер оптимизировать
+// - Докер оптимизировать
 
 type App struct {
 	Config         *config.ConfigWSNotifier

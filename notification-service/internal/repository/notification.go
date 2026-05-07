@@ -38,7 +38,7 @@ func (r *notificationRepo) Create(ctx context.Context, n *model.Notification, e 
 			return err
 		}
 
-		e.NotificationID = &n.ID
+		e.NotificationID = n.ID
 		e.UserID = n.UserID
 		e.Priority = n.Priority
 

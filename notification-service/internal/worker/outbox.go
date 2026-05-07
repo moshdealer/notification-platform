@@ -68,27 +68,27 @@ func (s *Syncer) syncBatch() {
 
 		switch event.Status {
 		case model.StatusSent: // в зависимости от твоих констант
-			err = s.repo.MarkAsSent(context.Background(), *event.NotificationID)
+			err = s.repo.MarkAsSent(context.Background(), event.NotificationID)
 
 		case model.StatusDelivered:
-			err = s.repo.MarkAsDelivered(context.Background(), *event.NotificationID)
+			err = s.repo.MarkAsDelivered(context.Background(), event.NotificationID)
 
 		case model.StatusRead: // в зависимости от твоих констант
-			err = s.repo.MarkAsRead(context.Background(), *event.NotificationID)
+			err = s.repo.MarkAsRead(context.Background(), event.NotificationID)
 
 		case model.StatusFailed:
-			err = s.repo.MarkAsFailed(context.Background(), *event.NotificationID)
+			err = s.repo.MarkAsFailed(context.Background(), event.NotificationID)
 
 		case model.StatusExpired: // в зависимости от твоих констант
-			err = s.repo.MarkAsExpired(context.Background(), *event.NotificationID)
+			err = s.repo.MarkAsExpired(context.Background(), event.NotificationID)
 
 		case model.StatusWaiting:
-			err = s.repo.MarkAsWaiting(context.Background(), *event.NotificationID)
+			err = s.repo.MarkAsWaiting(context.Background(), event.NotificationID)
 
 		}
 
 		if err != nil {
-			log.Printf("[OutboxSyncer] failed to sync notification %d: %v", *event.NotificationID, err)
+			log.Printf("[OutboxSyncer] failed to sync notification %d: %v", event.NotificationID, err)
 			continue
 		}
 
