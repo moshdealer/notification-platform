@@ -38,22 +38,19 @@ func (r *notificationRepo) Create(ctx context.Context, n *model.Notification, e 
 			return err
 		}
 
-		e.NotificationID = &n.ID
+		e.NotificationID = n.ID
 		e.UserID = n.UserID
 		e.Priority = n.Priority
 
-		if e.Payload == nil {
-			e.Payload = make(map[string]any)
-		}
-		e.Payload = map[string]any{
-			"notification_id": n.ID,
-			"user_id":         n.UserID,
-			"title":           n.Title,
-			"body":            n.Body,
-			"type":            n.Type,
-			"priority":        n.Priority,
-			"data":            n.Data,
-			"created_at":      n.CreatedAt,
+		e.Payload = model.NatsPayload{
+			NotificationID: n.ID,
+			UserID:         n.UserID,
+			Title:          n.Title,
+			Body:           n.Body,
+			Type:           n.Type,
+			Priority:       n.Priority,
+			Data:           n.Data,
+			CreatedAt:      n.CreatedAt,
 		}
 
 		if err := tx.Create(&e).Error; err != nil {

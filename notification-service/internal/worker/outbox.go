@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/moshdealer/notification-platform/notification-service/internal/repository"
-	"github.com/moshdealer/notification-platform/pkg/config"
 	"github.com/moshdealer/notification-platform/pkg/model"
 )
 
@@ -17,7 +16,7 @@ type Syncer struct {
 	batchSize int
 }
 
-func NewSyncer(repo repository.NotificationRepository, interval time.Duration, batchSize int, cfg *config.RedisCfg) *Syncer {
+func NewSyncer(repo repository.NotificationRepository, interval time.Duration, batchSize int) *Syncer {
 	if interval == 0 {
 		interval = 5 * time.Second
 	}
@@ -69,30 +68,30 @@ func (s *Syncer) syncBatch() {
 
 		switch event.Status {
 		case model.StatusSent: // в зависимости от твоих констант
-			err = s.repo.MarkAsSent(context.Background(), *event.NotificationID)
+			err = s.repo.MarkAsSent(context.Background(), event.NotificationID)
 
 		case model.StatusDelivered:
-			err = s.repo.MarkAsDelivered(context.Background(), *event.NotificationID)
+			err = s.repo.MarkAsDelivered(context.Background(), event.NotificationID)
 
 		case model.StatusRead: // в зависимости от твоих констант
-			err = s.repo.MarkAsRead(context.Background(), *event.NotificationID)
+			err = s.repo.MarkAsRead(context.Background(), event.NotificationID)
 
 		case model.StatusFailed:
-			err = s.repo.MarkAsFailed(context.Background(), *event.NotificationID)
+			err = s.repo.MarkAsFailed(context.Background(), event.NotificationID)
 
 		case model.StatusExpired: // в зависимости от твоих констант
-			err = s.repo.MarkAsExpired(context.Background(), *event.NotificationID)
+			err = s.repo.MarkAsExpired(context.Background(), event.NotificationID)
 
 		case model.StatusWaiting:
-			err = s.repo.MarkAsWaiting(context.Background(), *event.NotificationID)
+			err = s.repo.MarkAsWaiting(context.Background(), event.NotificationID)
 
 		}
 
 		if err != nil {
-			log.Printf("[OutboxSyncer] failed to sync notification %d: %v", *event.NotificationID, err)
+			log.Printf("[OutboxSyncer] failed to sync notification %d: %v", event.NotificationID, err)
 			continue
 		}
-		
+
 		if markErr := s.repo.MarkOutboxAsSynced(context.Background(), event.ID); markErr != nil {
 			log.Printf("[OutboxSyncer] failed to mark as synced %d: %v", event.ID, markErr)
 		} else {

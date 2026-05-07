@@ -64,12 +64,12 @@ func (s *NotificationService) StartOutboxDispatcher(ctx context.Context) {
 			}
 
 			for _, event := range events {
-				payload := map[string]any{
-					"event_id": event.ID,
-					"payload":  event.Payload,
+				natsMessage := model.NatsMessage{
+					EventID: event.ID,
+					Payload: event.Payload,
 				}
 
-				if err := s.publisher.Publish(ctx, event.UserID, payload); err == nil {
+				if err := s.publisher.Publish(ctx, event.UserID, natsMessage); err == nil {
 					if markErr := s.repo.MarkOutboxAsSent(ctx, event.ID); markErr == nil {
 						fmt.Printf("Published outbox event %d to NATS\n", event.ID)
 					} else {

@@ -6,6 +6,8 @@ import (
 	"strings"
 )
 
+// TODO Потом убрать вообще этот модуль
+
 func ExtractEventID(data []byte) uint {
 	type outer struct {
 		EventID uint `json:"event_id"`

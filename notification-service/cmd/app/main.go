@@ -22,16 +22,14 @@ import (
 )
 
 //TODO убрать ненужные комментарии
-// Разбор того как мы шлем сообщение в итоге (отказаться от payload)
 // Auth токены
-// под каждый сервис свой конфиг
 // Логирование
 // докер оптимизировать
 // рефакторинг всего как будет работать
-// Разбор каждого модуля
+// Просмотр ссылок и переменных
 
 type App struct {
-	Config              *config.Config
+	Config              *config.ConfigNotificationService
 	DB                  *gorm.DB
 	NotificationRepo    repository.NotificationRepository
 	NATSPublisher       *nats.Publisher
@@ -41,7 +39,7 @@ type App struct {
 
 func main() {
 	// 1. Загружаем конфиг
-	cfg, err := config.Load()
+	cfg, err := config.LoadNotificationService()
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "config load error: %v\n", err)
 		os.Exit(1)
@@ -75,6 +73,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := nats.CreateNotificationsStream(app.NATSPublisher.GetJetStream(), cfg.NATS); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Failed to create JetStream stream: %v\n", err)
+		os.Exit(1)
+	}
+
 	// 6. Сервис
 	app.NotificationService = service.NewNotificationService(app.NotificationRepo, app.NATSPublisher)
 
@@ -83,7 +86,6 @@ func main() {
 		app.NotificationRepo,
 		10*time.Second,
 		100,
-		&cfg.Redis,
 	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

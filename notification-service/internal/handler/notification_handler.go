@@ -69,5 +69,3 @@ func (h *NotificationHandler) MarkAsRead(c *gin.Context) {
 
 	c.Status(http.StatusNoContent)
 }
-
-// TODO ошибки

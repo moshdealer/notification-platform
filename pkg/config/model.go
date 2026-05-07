@@ -2,12 +2,17 @@ package config
 
 import "time"
 
-type Config struct {
-	Server        ServerCfg        `mapstructure:"server"`
-	Database      DatabaseCfg      `mapstructure:"database"`
-	Redis         RedisCfg         `mapstructure:"redis"`
-	NATS          NATSCfg          `mapstructure:"nats"`
-	Notifications NotificationsCfg `mapstructure:"notifications"`
+type ConfigNotificationService struct {
+	Server   ServerCfg   `mapstructure:"server"`
+	Database DatabaseCfg `mapstructure:"database"`
+	NATS     NATSCfg     `mapstructure:"nats"`
+}
+
+type ConfigWSNotifier struct {
+	Server   ServerCfg   `mapstructure:"server"`
+	Database DatabaseCfg `mapstructure:"database"`
+	Redis    RedisCfg    `mapstructure:"redis"`
+	NATS     NATSCfg     `mapstructure:"nats"`
 }
 type ServerCfg struct {
 	Port         string        `mapstructure:"port"`
@@ -36,7 +41,4 @@ type NATSCfg struct {
 	NATSAddr    string `mapstructure:"addr"`
 	SubjectNew  string `mapstructure:"subject_new"`
 	SubjectRead string `mapstructure:"subject_read"`
-}
-type NotificationsCfg struct {
-	DefaultPriority string `mapstructure:"default_priority"`
 }

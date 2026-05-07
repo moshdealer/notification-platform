@@ -1,12 +1,14 @@
 package websocket
 
 import (
+	"encoding/json"
 	"fmt"
+	"github.com/moshdealer/notification-platform/pkg/model"
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
-	"github.com/moshdealer/notification-platform/pkg/utils"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/redis"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/repository"
 )
@@ -57,7 +59,11 @@ func (h *Handler) WebSocket(c *gin.Context) {
 	unread, err := h.redisClient.GetUnread(ctx, userID)
 	if err == nil && len(unread) > 0 {
 		for _, data := range unread {
-			eventID := utils.ExtractEventID(data)
+			natsMessage := model.NatsMessage{}
+			if err := json.Unmarshal(data, &natsMessage); err != nil {
+				log.Printf("Failed to unmarshal NatsEvent: %v", err)
+			}
+			eventID := natsMessage.EventID
 
 			if sendErr := h.wsManager.SendToUser(userID, data); sendErr == nil {
 				// Успешно отправили

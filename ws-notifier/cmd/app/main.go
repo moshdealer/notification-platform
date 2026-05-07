@@ -3,9 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/moshdealer/notification-platform/pkg/database/db"
-	"github.com/moshdealer/notification-platform/ws-notifier/internal/repository"
-	"github.com/moshdealer/notification-platform/ws-notifier/internal/router"
 	"log"
 	"net/http"
 	"os"
@@ -14,8 +11,11 @@ import (
 	"time"
 
 	"github.com/moshdealer/notification-platform/pkg/config"
+	"github.com/moshdealer/notification-platform/pkg/database/db"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/nats"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/redis"
+	"github.com/moshdealer/notification-platform/ws-notifier/internal/repository"
+	"github.com/moshdealer/notification-platform/ws-notifier/internal/router"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/websocket"
 )
 
@@ -25,17 +25,14 @@ WS-Notifier - сервис для обработки WebSocket соединен�
 */
 
 //TODO
-// - Redis конфиги и тестирование
-// - Auth / token validation
-// - Connection limits / rate limiting
-// - Graceful shutdown для всех клиентов
-// - Prometheus metrics (кол-во подключённых пользователей)
+// - Auth
+// - Graceful shutdown для всех
+// - Prometheus metrics попробовать накинуть
 // - Логирование
-// под каждый сервис свой конфиг
-// докер оптимизировать
+// - Докер оптимизировать
 
 type App struct {
-	Config         *config.Config
+	Config         *config.ConfigWSNotifier
 	RedisClient    *redis.Client
 	WSManager      *websocket.Manager
 	NATSSubscriber *nats.Subscriber
@@ -44,7 +41,7 @@ type App struct {
 
 func main() {
 	// 1. Загружаем конфиг
-	cfg, err := config.Load()
+	cfg, err := config.LoadWSNotifier()
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "config load error: %v\n", err)
 		os.Exit(1)
@@ -69,7 +66,7 @@ func main() {
 	app.WSManager = websocket.NewManager()
 
 	// 4. NATS Subscriber (слушает уведомления и раздаёт по WS)
-	app.NATSSubscriber = nats.NewSubscriber(&app.Config.NATS, app.WSManager, app.RedisClient, app.OutBoxRepo)
+	app.NATSSubscriber, err = nats.NewSubscriber(&app.Config.NATS, app.WSManager, app.RedisClient, app.OutBoxRepo)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
