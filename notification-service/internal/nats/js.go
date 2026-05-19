@@ -17,7 +17,8 @@ func CreateNotificationsStream(js jetstream.JetStream, cfg config.NATSCfg) error
 		Name:     cfg.SubjectNew,
 		Subjects: []string{fmt.Sprintf("%v.>", cfg.SubjectNew)},
 
-		Retention: jetstream.WorkQueuePolicy, // сообщения удаляются после Ack
+		Retention:  jetstream.WorkQueuePolicy, // сообщения удаляются после Ack
+		Duplicates: 5 * time.Minute,
 		// Если хотим работать с WorkQueuePolicy:
 		MaxAge:   7 * 24 * time.Hour, // максимальное время жизни
 		MaxMsgs:  -1,                 // без лимита по количеству

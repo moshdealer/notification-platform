@@ -50,9 +50,9 @@ func (p *Publisher) Publish(ctx context.Context, userId string, message model.Na
 	}
 
 	subject := fmt.Sprintf("%s.%s", p.subject, userId)
-
+	msgID := fmt.Sprintf("notif-%d", message.EventID)
 	// Publish с ожиданием Ack от стрима
-	_, err = p.js.Publish(ctx, subject, data, jetstream.WithMsgID(fmt.Sprintf("notif-%d", time.Now().UnixNano())))
+	_, err = p.js.Publish(ctx, subject, data, jetstream.WithMsgID(msgID))
 	if err != nil {
 		return fmt.Errorf("failed to publish to %s: %w", subject, err)
 	}
