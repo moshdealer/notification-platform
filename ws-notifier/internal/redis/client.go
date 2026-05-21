@@ -11,15 +11,21 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+/*
 var (
 	TestTTL            = 20 * time.Second
 	UnreadSetKeyPrefix string
 	DefaultTTL         time.Duration
 	HighTTL            time.Duration
-)
+)*/
 
 type Client struct {
-	rdb *redis.Client
+	rdb                *redis.Client
+	UnreadSetKeyPrefix string
+	BroadcastChannel   string
+	TestTTL            time.Duration
+	DefaultTTL         time.Duration
+	HighTTL            time.Duration
 }
 
 func NewClient(cfg *config.RedisCfg) *Client {
@@ -28,18 +34,25 @@ func NewClient(cfg *config.RedisCfg) *Client {
 		Password: cfg.RedisPassword,
 		DB:       0,
 	})
-
-	DefaultTTL = time.Duration(cfg.DefaultTTL) * time.Second
-	HighTTL = time.Duration(cfg.HighTTL) * time.Second
-	UnreadSetKeyPrefix = cfg.UnreadKeyPrefix
-
+	/*
+		DefaultTTL = time.Duration(cfg.DefaultTTL) * time.Second
+		HighTTL = time.Duration(cfg.HighTTL) * time.Second
+		UnreadSetKeyPrefix = cfg.UnreadKeyPrefix
+	*/
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		panic("Redis connection failed: " + err.Error())
 	}
 
-	return &Client{rdb: rdb}
+	return &Client{
+		rdb:                rdb,
+		DefaultTTL:         time.Duration(cfg.DefaultTTL) * time.Second,
+		HighTTL:            time.Duration(cfg.HighTTL) * time.Second,
+		TestTTL:            20 * time.Second,
+		UnreadSetKeyPrefix: cfg.UnreadKeyPrefix,
+		BroadcastChannel:   cfg.BroadcastChannel,
+	}
 }
 
 // AddUnread
@@ -51,10 +64,10 @@ func (c *Client) AddUnread(ctx context.Context, userID string, data []byte) erro
 	notificationPayload := model.NatsMessage{}
 
 	if err := json.Unmarshal(data, &notificationPayload); err != nil || notificationPayload.EventID == 0 {
-		return c.rdb.Set(ctx, fmt.Sprintf("user:%s:unread:fallback:%d", userID, time.Now().UnixNano()), data, TestTTL).Err()
+		return c.rdb.Set(ctx, fmt.Sprintf("user:%s:unread:fallback:%d", userID, time.Now().UnixNano()), data, c.TestTTL).Err()
 	}
 
-	setKey := fmt.Sprintf(UnreadSetKeyPrefix, userID)
+	setKey := fmt.Sprintf(c.UnreadSetKeyPrefix, userID)
 	msgKey := fmt.Sprintf("%s:%d", setKey, notificationPayload.EventID) // user:123:unread:456
 	pipe := c.rdb.TxPipeline()
 
@@ -67,10 +80,10 @@ func (c *Client) AddUnread(ctx context.Context, userID string, data []byte) erro
 	var TTL time.Duration
 	// 2. Сохраняем полное сообщение с индивидуальным TTL
 	if notificationPayload.Payload.Priority == "high" {
-		TTL = HighTTL
+		TTL = c.HighTTL
 		pipe.Set(ctx, msgKey, data, TTL)
 	} else {
-		TTL = DefaultTTL
+		TTL = c.DefaultTTL
 		pipe.Set(ctx, msgKey, data, TTL)
 	}
 
@@ -83,7 +96,7 @@ func (c *Client) AddUnread(ctx context.Context, userID string, data []byte) erro
 
 // GetUnread — возвращает в правильном порядке
 func (c *Client) GetUnread(ctx context.Context, userID string) ([][]byte, error) {
-	setKey := fmt.Sprintf(UnreadSetKeyPrefix, userID)
+	setKey := fmt.Sprintf(c.UnreadSetKeyPrefix, userID)
 
 	eventIDs, err := c.rdb.ZRange(ctx, setKey, 0, -1).Result()
 	if err != nil || len(eventIDs) == 0 {
@@ -102,18 +115,38 @@ func (c *Client) GetUnread(ctx context.Context, userID string) ([][]byte, error)
 	}
 
 	// Чистим после отправки
-	go c.ClearUnread(context.Background(), userID)
+	go c.ClearAllUnread(context.Background(), userID)
 
 	return result, nil
 }
 
-func (c *Client) ClearUnread(ctx context.Context, userID string) error {
+func (c *Client) ClearAllUnread(ctx context.Context, userID string) error {
 	pattern := fmt.Sprintf("user:%s:unread*", userID)
 	keys, _ := c.rdb.Keys(ctx, pattern).Result()
 	if len(keys) > 0 {
 		c.rdb.Del(ctx, keys...)
 	}
 	return nil
+}
+
+func (c *Client) RemoveUnread(ctx context.Context, userID string, eventID uint) error {
+	if eventID == 0 {
+		return nil
+	}
+
+	setKey := fmt.Sprintf(c.UnreadSetKeyPrefix, userID)
+	msgKey := fmt.Sprintf("%s:%d", setKey, eventID)
+
+	pipe := c.rdb.TxPipeline()
+
+	pipe.ZRem(ctx, setKey, eventID) // удаляем из Sorted Set
+	pipe.Del(ctx, msgKey)           // удаляем само сообщение
+
+	_, err := pipe.Exec(ctx)
+	if err == nil {
+		fmt.Printf("[Redis] Removed delivered event_id=%d for user=%s\n", eventID, userID)
+	}
+	return err
 }
 
 func (c *Client) Close() error {
@@ -127,4 +160,22 @@ func (c *Client) Close() error {
 		fmt.Println("Redis client closed")
 	}
 	return err
+}
+
+// PublishBroadcast публикует сообщение во broadcast-канал (для других нод)
+func (c *Client) PublishBroadcast(ctx context.Context, channel string, data []byte) error {
+	return c.rdb.Publish(ctx, channel, data).Err()
+}
+
+// SubscribeBroadcast подписывается на broadcast-канал
+// handler будет вызван на каждой ноде при получении сообщения
+func (c *Client) SubscribeBroadcast(ctx context.Context, channel string, handler func([]byte)) {
+	pubsub := c.rdb.Subscribe(ctx, channel)
+	ch := pubsub.Channel()
+
+	go func() {
+		for msg := range ch {
+			handler([]byte(msg.Payload))
+		}
+	}()
 }

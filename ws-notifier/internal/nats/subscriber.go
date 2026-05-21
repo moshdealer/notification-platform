@@ -79,11 +79,14 @@ func (s *Subscriber) Start() error {
 		return fmt.Errorf("failed to create consumer: %w", err)
 	}
 
+	// Запускаем слушателя Redis broadcast (все ноды будут слушать)
+	s.startRedisBroadcastListener()
+
 	consumeCtx, err := consumer.Consume(func(msg jetstream.Msg) {
 
 		natsMessage := model.NatsMessage{}
 		if err := json.Unmarshal(msg.Data(), &natsMessage); err != nil {
-			log.Printf("Failed to unmarshal NatsEvent: %v", err)
+			log.Printf("Failed to unmarshal: %v", err)
 			msg.Nak()
 			return
 		}
@@ -94,35 +97,43 @@ func (s *Subscriber) Start() error {
 
 		var ttl time.Duration
 		if priority == "high" {
-			ttl = redis.HighTTL
+			ttl = s.redisClient.HighTTL
 		} else {
-			ttl = redis.DefaultTTL
+			ttl = s.redisClient.DefaultTTL
 		}
 
+		sentLocally := false
+
+		// 1. Пытаемся отправить локально
 		if s.wsManager.HasActiveConnections(userID) {
 			if sendErr := s.wsManager.SendToUser(userID, msg.Data()); sendErr == nil {
-				// Успешно отправили онлайн
 				if err := s.repo.MarkAsDelivered(context.Background(), eventID); err != nil {
 					fmt.Printf("Failed to mark as delivered %d: %v\n", eventID, err)
 				}
-				msg.Ack()
+				sentLocally = true
+				fmt.Printf("Sent Message %v to online local user %v\n", eventID, userID)
+			}
+		}
+
+		// 2. Сохраняем в Redis ТОЛЬКО если не отправили локально
+		if !sentLocally {
+			if addErr := s.redisClient.AddUnread(context.Background(), userID, msg.Data()); addErr != nil {
+				fmt.Printf("Failed to save to Redis for user %s: %v\n", userID, addErr)
+				if err := s.repo.MarkAsFailed(context.Background(), eventID); err != nil {
+					fmt.Printf("Failed to mark as failed %d: %v\n", eventID, err)
+				}
+				msg.NakWithDelay(time.Second * 15)
 				return
 			}
-		}
+			fmt.Printf("Save Message %v to Redis Cache\n", eventID)
 
-		// Если юзер офлайн
-		if addErr := s.redisClient.AddUnread(context.Background(), userID, msg.Data()); addErr != nil {
-			fmt.Printf("Failed to save to Redis for user %s: %v\n", userID, addErr)
-			if err := s.repo.MarkAsFailed(context.Background(), eventID); err != nil {
-				fmt.Printf("Failed to mark as failed %d: %v\n", eventID, err)
+			if err := s.repo.MarkAsWaiting(context.Background(), eventID, ttl); err != nil {
+				fmt.Printf("Failed to mark as waiting %d: %v\n", eventID, err)
 			}
-			msg.NakWithDelay(time.Second * 15)
-			return
-		}
 
-		// Успешно сохранили в Redis
-		if err := s.repo.MarkAsWaiting(context.Background(), eventID, ttl); err != nil {
-			fmt.Printf("Failed to mark as waiting %d: %v\n", eventID, err)
+			// 3. Публикуем в broadcast — чтобы другие ноды попробовали отправить
+			s.redisClient.PublishBroadcast(context.Background(), s.redisClient.BroadcastChannel, msg.Data())
+			fmt.Printf("Publish Message %v to broadcast\n", eventID)
 		}
 
 		msg.Ack()
@@ -133,8 +144,33 @@ func (s *Subscriber) Start() error {
 	}
 
 	s.cons = consumeCtx
-	fmt.Println("NATS JetStream Subscriber started (WorkQueue + Redis fallback)")
+	fmt.Println("NATS JetStream Subscriber started with Redis Broadcast")
 	return nil
+}
+
+// TODO  навести порядок в слоях, это нужно в другой модуль вынести
+// Слушаем broadcast от других нод
+func (s *Subscriber) startRedisBroadcastListener() {
+	s.redisClient.SubscribeBroadcast(context.Background(), s.redisClient.BroadcastChannel, func(data []byte) {
+		var natsMessage model.NatsMessage
+		if err := json.Unmarshal(data, &natsMessage); err != nil {
+			return
+		}
+
+		userID := natsMessage.Payload.UserID
+		eventID := natsMessage.EventID
+
+		// Отправляем, только если юзер онлайн именно на этой ноде
+		if s.wsManager.HasActiveConnections(userID) {
+			if err := s.wsManager.SendToUser(userID, data); err == nil {
+				if markErr := s.repo.MarkAsDelivered(context.Background(), natsMessage.EventID); markErr != nil {
+					fmt.Printf("Failed to mark as delivered from broadcast %d: %v\n", natsMessage.EventID, markErr)
+				}
+				s.redisClient.RemoveUnread(context.Background(), userID, eventID)
+				fmt.Println("Sent Message to User from Redis broadcast")
+			}
+		}
+	})
 }
 
 func (s *Subscriber) Close() {

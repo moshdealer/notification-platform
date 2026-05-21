@@ -70,6 +70,7 @@ func (h *Handler) WebSocket(c *gin.Context) {
 				if markErr := h.repo.MarkAsDelivered(ctx, eventID); markErr != nil {
 					fmt.Printf("failed to mark delivered notification %d: %v", eventID, markErr)
 				}
+				fmt.Printf("Sent message %v to user %v from Redis Cache\n", eventID, userID)
 			} else {
 				// Не удалось отправить
 				if markErr := h.repo.MarkAsFailed(ctx, eventID); markErr != nil {
@@ -79,7 +80,7 @@ func (h *Handler) WebSocket(c *gin.Context) {
 		}
 	}
 	// Очищаем после отправки
-	go h.redisClient.ClearUnread(c.Request.Context(), userID)
+	go h.redisClient.ClearAllUnread(c.Request.Context(), userID)
 }
 
 func (h *Handler) validateToken(token, userID string) bool {

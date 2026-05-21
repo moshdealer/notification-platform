@@ -3,9 +3,10 @@ package config
 import "time"
 
 type ConfigNotificationService struct {
-	Server   ServerCfg   `mapstructure:"server"`
-	Database DatabaseCfg `mapstructure:"database"`
-	NATS     NATSCfg     `mapstructure:"nats"`
+	Server                  ServerCfg   `mapstructure:"server"`
+	Database                DatabaseCfg `mapstructure:"database"`
+	NATS                    NATSCfg     `mapstructure:"nats"`
+	OutboxDispatcherEnabled bool        `mapstructure:"outbox_dispatcher_enabled"`
 }
 
 type ConfigWSNotifier struct {
@@ -28,13 +29,14 @@ type DatabaseCfg struct {
 }
 
 type RedisCfg struct {
-	RedisAddr       string `mapstructure:"addr"`
-	RedisPassword   string `mapstructure:"password"`
-	RedisDB         int    `mapstructure:"db"`
-	PoolSize        int    `mapstructure:"pool_size"`
-	DefaultTTL      int    `mapstructure:"default_ttl"`
-	HighTTL         int    `mapstructure:"high_ttl"`
-	UnreadKeyPrefix string `mapstructure:"unread_key_prefix"`
+	RedisAddr        string `mapstructure:"addr"`
+	RedisPassword    string `mapstructure:"password"`
+	RedisDB          int    `mapstructure:"db"`
+	PoolSize         int    `mapstructure:"pool_size"`
+	DefaultTTL       int    `mapstructure:"default_ttl"`
+	HighTTL          int    `mapstructure:"high_ttl"`
+	UnreadKeyPrefix  string `mapstructure:"unread_key_prefix"`
+	BroadcastChannel string `mapstructure:"broadcast_channel"`
 }
 
 type NATSCfg struct {

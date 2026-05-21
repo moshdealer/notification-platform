@@ -14,6 +14,7 @@ redis:
   default_ttl: 30
   high_ttl: 0
   unread_key_prefix: "user:%s:unread"
+  broadcast_channel: "notifications:broadcast"
 
 nats:
   subject_new: "notifications_new"

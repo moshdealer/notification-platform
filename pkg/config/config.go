@@ -22,6 +22,7 @@ func LoadNotificationService() (*ConfigNotificationService, error) {
 	// Связали структуру с переменными окружениями
 	_ = v.BindEnv("database.dsn", "POSTGRES_DSN")
 	_ = v.BindEnv("nats.addr", "NATS_ADDR")
+	_ = v.BindEnv("outbox_dispatcher_enabled", "OUTBOX_DISPATCHER_ENABLED")
 
 	// Считали yaml-конфиг
 	if err := v.ReadInConfig(); err != nil {
@@ -35,6 +36,7 @@ func LoadNotificationService() (*ConfigNotificationService, error) {
 	// Считали env-переменные
 	v.GetString("database.dsn")
 	v.GetString("nats.addr")
+	v.GetString("outbox_dispatcher_enabled")
 
 	fmt.Println(cfg)
 	return &cfg, nil
