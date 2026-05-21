@@ -92,8 +92,16 @@ func main() {
 	defer stop()
 
 	// Запускаем outbox dispatcher (отправка событий в NATS)
-	go app.NotificationService.StartOutboxDispatcher(ctx)
-	go app.OutboxSyncer.Run(ctx)
+
+	if app.Config.OutboxDispatcherEnabled {
+		fmt.Println("[Outbox] Starting background workers:")
+		fmt.Println("OutboxDispatcher (pending events to NATS)")
+		fmt.Println("OutboxSyncer (sync status back to notifications)")
+		go app.NotificationService.StartOutboxDispatcher(ctx)
+		go app.OutboxSyncer.Run(ctx)
+	} else {
+		fmt.Println("[Outbox] Running in API-only mode (background workers disabled)")
+	}
 
 	// HTTP сервер
 	notificationHandler := handler.NewNotificationHandler(app.NotificationService)

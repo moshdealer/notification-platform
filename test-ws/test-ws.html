@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>WebSocket Test (через Nginx)</title>
+</head>
+<body>
+<h2>WebSocket Test через Nginx + несколько нод ws-notifier</h2>
+<p><strong>Endpoint:</strong> ws://localhost:8080/ws</p>
+<div id="log" style="white-space: pre-wrap; font-family: monospace; margin-top: 15px;"></div>
+
+<script>
+    const userId = "123456";
+    const token = "anytoken";
+
+    // Подключаемся через Nginx
+    const ws = new WebSocket(`ws://localhost:8080/ws?user_id=${userId}&token=${token}`);
+
+    const log = document.getElementById('log');
+
+    function write(msg) {
+        const time = new Date().toLocaleTimeString();
+        log.innerHTML += `[${time}] ${msg}\n`;
+        log.scrollTop = log.scrollHeight;
+        console.log(msg);
+    }
+
+    ws.onopen = () => {
+        write("WebSocket успешно подключён через Nginx");
+        write(`UserID: ${userId}`);
+        write("Ожидаем уведомления...");
+    };
+
+    ws.onmessage = (event) => {
+        write("Получено сообщение: " + event.data);
+    };
+
+    ws.onclose = (event) => {
+        write(`WebSocket закрыт. Код: ${event.code}`);
+    };
+
+    ws.onerror = (err) => {
+        write("Ошибка WebSocket: " + err);
+    };
+
+    // Кнопка для ручного отключения (для теста)
+    window.addEventListener('beforeunload', () => {
+        ws.close();
+    });
+</script>
+</body>
+</html>
