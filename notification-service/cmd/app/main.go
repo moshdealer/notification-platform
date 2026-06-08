@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"gorm.io/gorm"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -19,14 +18,13 @@ import (
 	outbox "github.com/moshdealer/notification-platform/notification-service/internal/worker"
 	"github.com/moshdealer/notification-platform/pkg/config"
 	"github.com/moshdealer/notification-platform/pkg/database/db"
+	"github.com/moshdealer/notification-platform/pkg/observability"
 )
 
 //TODO убрать ненужные комментарии
-// Auth токены
-// Логирование
+// Контексты и graceful shutdown
 // докер оптимизировать
 // рефакторинг всего как будет работать
-// Просмотр ссылок и переменных
 
 type App struct {
 	Config              *config.ConfigNotificationService
@@ -41,19 +39,23 @@ func main() {
 	// 1. Загружаем конфиг
 	cfg, err := config.LoadNotificationService()
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "config load error: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "Load load error: %v\n", err)
 		os.Exit(1)
 	}
+
+	observability.Init(cfg.LogsCfg)
+	// TODO Логирую конфиг специально для удобства отладки, для боя убрать
+	observability.Debug(context.Background(), "Config has been loaded:", "config", cfg)
 
 	// 2. Подключаем БД + миграции
 	dbConn, err := db.Connect(&cfg.Database)
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "DB connect error: %v\n", err)
+		observability.Error(context.Background(), "DB connect error", "error", err)
 		os.Exit(1)
 	}
 	err = db.Migrate(&cfg.Database)
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Migrate error: %v\n", err)
+		observability.Error(context.Background(), "Migrate error", "error", err)
 		os.Exit(1)
 	}
 
@@ -69,12 +71,12 @@ func main() {
 	// 5. NATS Publisher
 	app.NATSPublisher, err = nats.NewPublisher(&app.Config.NATS)
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "NATS Publisher connect error: %v\n", err)
+		observability.Error(context.Background(), "NATS Publisher connect error", "error", err)
 		os.Exit(1)
 	}
 
 	if err := nats.CreateNotificationsStream(app.NATSPublisher.GetJetStream(), cfg.NATS); err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Failed to create JetStream stream: %v\n", err)
+		observability.Error(context.Background(), "Failed to create JetStream stream:", "error", err)
 		os.Exit(1)
 	}
 
@@ -93,14 +95,15 @@ func main() {
 
 	// Запускаем outbox dispatcher (отправка событий в NATS)
 
+	dispatcherCtx := observability.WithLogger(ctx, observability.FromContext(ctx))
 	if app.Config.OutboxDispatcherEnabled {
-		fmt.Println("[Outbox] Starting background workers:")
-		fmt.Println("OutboxDispatcher (pending events to NATS)")
-		fmt.Println("OutboxSyncer (sync status back to notifications)")
-		go app.NotificationService.StartOutboxDispatcher(ctx)
-		go app.OutboxSyncer.Run(ctx)
+		observability.Info(dispatcherCtx, "[Outbox] Starting background workers",
+			"workers", []string{"OutboxDispatcher", "OutboxSyncer"},
+		)
+		go app.NotificationService.StartOutboxDispatcher(dispatcherCtx)
+		go app.OutboxSyncer.Run(dispatcherCtx)
 	} else {
-		fmt.Println("[Outbox] Running in API-only mode (background workers disabled)")
+		observability.Info(context.Background(), "[Outbox] Running in API-only mode (background workers disabled)")
 	}
 
 	// HTTP сервер
@@ -116,14 +119,16 @@ func main() {
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("Server error: %v", err)
+			observability.Error(context.Background(), "Server error", "error", err)
 		}
 	}()
 
-	fmt.Printf("Notification service started on http://localhost:%s\n", app.Config.Server.Port)
+	observability.Info(context.Background(), "Notification service started",
+		"port", app.Config.Server.Port,
+	)
 
 	<-ctx.Done()
-	fmt.Println("Shutting down...")
+	observability.Info(context.Background(), "Shutting down Notification service...")
 
 	if app.NATSPublisher != nil {
 		app.NATSPublisher.Close()
@@ -133,8 +138,8 @@ func main() {
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Printf("Shutdown error: %v", err)
+		observability.Error(context.Background(), "Shutdown error", "error", err)
 	}
 
-	fmt.Println("Service stopped gracefully")
+	observability.Info(context.Background(), "Service stopped gracefully")
 }

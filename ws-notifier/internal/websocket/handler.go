@@ -2,13 +2,12 @@ package websocket
 
 import (
 	"encoding/json"
-	"fmt"
-	"github.com/moshdealer/notification-platform/pkg/model"
-	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/moshdealer/notification-platform/pkg/model"
+	"github.com/moshdealer/notification-platform/pkg/observability"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/redis"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/repository"
 )
@@ -50,7 +49,10 @@ func (h *Handler) WebSocket(c *gin.Context) {
 	h.wsManager.Register(userID, conn)
 
 	if err = h.wsManager.SendToUser(userID, []byte(`{"type":"connected"}`)); err != nil {
-		fmt.Println("Failed to send message: ", err)
+		observability.Error(c.Request.Context(), "Failed to send connected message",
+			"user_id", userID,
+			"error", err,
+		)
 	}
 
 	ctx := c.Request.Context()
@@ -61,20 +63,35 @@ func (h *Handler) WebSocket(c *gin.Context) {
 		for _, data := range unread {
 			natsMessage := model.NatsMessage{}
 			if err := json.Unmarshal(data, &natsMessage); err != nil {
-				log.Printf("Failed to unmarshal NatsEvent: %v", err)
+				observability.Error(ctx, "Failed to unmarshal message NatsEvent",
+					"user_id", userID,
+					"error", err,
+				)
 			}
 			eventID := natsMessage.EventID
 
 			if sendErr := h.wsManager.SendToUser(userID, data); sendErr == nil {
 				// Успешно отправили
 				if markErr := h.repo.MarkAsDelivered(ctx, eventID); markErr != nil {
-					fmt.Printf("failed to mark delivered notification %d: %v", eventID, markErr)
+					observability.Error(ctx, "failed to mark delivered notification",
+						"event_id", eventID,
+						"user_id", userID,
+						"error", markErr,
+					)
 				}
-				fmt.Printf("Sent message %v to user %v from Redis Cache\n", eventID, userID)
+				observability.Info(ctx, "Notification sent from Redis cache",
+					"event_id", eventID,
+					"user_id", userID,
+				)
+
 			} else {
 				// Не удалось отправить
 				if markErr := h.repo.MarkAsFailed(ctx, eventID); markErr != nil {
-					fmt.Printf("failed to mark failed notification %d: %v", eventID, markErr)
+					observability.Error(ctx, "Failed to mark notification as failed",
+						"event_id", eventID,
+						"user_id", userID,
+						"error", markErr,
+					)
 				}
 			}
 		}

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/moshdealer/notification-platform/pkg/config"
 	"github.com/moshdealer/notification-platform/pkg/database/db"
+	"github.com/moshdealer/notification-platform/pkg/observability"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/nats"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/redis"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/repository"
@@ -25,8 +25,7 @@ WS-Notifier - сервис для обработки WebSocket соединен�
 */
 
 //TODO
-// - Auth
-// - Graceful shutdown для всех
+// Контексты и graceful shutdown
 // - Prometheus metrics попробовать накинуть
 // - Логирование
 // - Докер оптимизировать
@@ -51,9 +50,13 @@ func main() {
 		Config: cfg,
 	}
 
+	observability.Init(cfg.LogsCfg)
+	// TODO Логирую конфиг специально для удобства отладки, для боя убрать
+	observability.Debug(context.Background(), "Config loaded", "config", cfg)
+
 	dbConn, err := db.Connect(&cfg.Database)
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "DB connect error: %v\n", err)
+		observability.Error(context.Background(), "DB connect error", "error", err)
 		os.Exit(1)
 	}
 
@@ -73,10 +76,10 @@ func main() {
 
 	// Запускаем NATS subscriber
 	if err := app.NATSSubscriber.Start(); err != nil {
-		log.Printf("NATS Subscriber start error: %v", err)
+		observability.Error(context.Background(), "NATS Subscriber start error", "error", err)
 		os.Exit(1)
 	}
-	fmt.Println("NATS WebSocket Subscriber запущен")
+	observability.Info(context.Background(), "NATS WebSocket Subscriber запущен")
 
 	// 5. HTTP сервер (только WebSocket)
 
@@ -93,21 +96,23 @@ func main() {
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("Server error: %v", err)
+			observability.Error(context.Background(), "Server error", "error", err)
 		}
 	}()
-	fmt.Printf("WS-Notifier started on http://localhost:%s\n", app.Config.Server.Port)
-	fmt.Printf("WebSocket endpoint: ws://localhost:%s/ws\n", app.Config.Server.Port)
+	observability.Info(context.Background(), "WS-Notifier started on http://localhost",
+		"port", app.Config.Server.Port)
+	observability.Info(context.Background(), "WebSocket endpoint: ws://localhost",
+		"port", app.Config.Server.Port)
 
 	<-ctx.Done()
-	fmt.Println("Shutting down WS-Notifier...")
+	observability.Info(context.Background(), "Shutting down WS-Notifier")
 
 	// Graceful shutdown
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Printf("Server shutdown error: %v", err)
+		observability.Error(context.Background(), "Server shutdown error", "error", err)
 	}
 
 	if app.NATSSubscriber != nil {
@@ -122,5 +127,5 @@ func main() {
 		app.WSManager.CloseAll()
 	}
 
-	fmt.Println("WS-Notifier stopped gracefully")
+	observability.Info(context.Background(), "WS-Notifier stopped gracefully")
 }

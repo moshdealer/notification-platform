@@ -3,12 +3,15 @@ package outbox
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/moshdealer/notification-platform/notification-service/internal/repository"
 	"github.com/moshdealer/notification-platform/pkg/model"
+	"github.com/moshdealer/notification-platform/pkg/observability"
 )
+
+// TODO поправить вывод длительности операций
 
 type Syncer struct {
 	repo      repository.NotificationRepository
@@ -34,26 +37,32 @@ func (s *Syncer) Run(ctx context.Context) {
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
 
-	log.Printf("[OutboxSyncer] started, interval=%v, batch=%d", s.interval, s.batchSize)
+	logger := observability.FromContext(ctx)
+	logger.Info("OutboxSyncer started",
+		slog.Duration("interval", s.interval),
+		"batch", s.batchSize,
+	)
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("[OutboxSyncer] stopped")
+			logger.Info("OutboxSyncer stopped")
+
 			return
 		case <-ticker.C:
-			s.syncBatch()
+			s.syncBatch(ctx)
 		}
 	}
 }
 
-func (s *Syncer) syncBatch() {
+func (s *Syncer) syncBatch(ctx context.Context) {
 	start := time.Now()
+	logger := observability.FromContext(ctx)
 
 	// Получаем события, которые нужно синхронизировать
 	events, err := s.repo.GetOutboxEventsForSync(context.Background(), s.batchSize)
 	if err != nil {
-		log.Printf("[OutboxSyncer] GetOutboxEventsForSync error: %v", err)
+		logger.Error("GetOutboxEventsForSync error", "error", err)
 		return
 	}
 
@@ -68,38 +77,43 @@ func (s *Syncer) syncBatch() {
 
 		switch event.Status {
 		case model.StatusSent: // в зависимости от твоих констант
-			err = s.repo.MarkAsSent(context.Background(), event.NotificationID)
+			err = s.repo.MarkAsSent(ctx, event.NotificationID)
 
 		case model.StatusDelivered:
-			err = s.repo.MarkAsDelivered(context.Background(), event.NotificationID)
+			err = s.repo.MarkAsDelivered(ctx, event.NotificationID)
 
 		case model.StatusRead: // в зависимости от твоих констант
-			err = s.repo.MarkAsRead(context.Background(), event.NotificationID)
+			err = s.repo.MarkAsRead(ctx, event.NotificationID)
 
 		case model.StatusFailed:
-			err = s.repo.MarkAsFailed(context.Background(), event.NotificationID)
+			err = s.repo.MarkAsFailed(ctx, event.NotificationID)
 
 		case model.StatusExpired: // в зависимости от твоих констант
-			err = s.repo.MarkAsExpired(context.Background(), event.NotificationID)
+			err = s.repo.MarkAsExpired(ctx, event.NotificationID)
 
 		case model.StatusWaiting:
-			err = s.repo.MarkAsWaiting(context.Background(), event.NotificationID)
+			err = s.repo.MarkAsWaiting(ctx, event.NotificationID)
 
 		}
 
 		if err != nil {
-			log.Printf("[OutboxSyncer] failed to sync notification %d: %v", event.NotificationID, err)
+			logger.Error("OutboxSyncer failed to sync notification",
+				"notification_id", event.NotificationID, "error", err)
 			continue
 		}
 
 		if markErr := s.repo.MarkOutboxAsSynced(context.Background(), event.ID); markErr != nil {
-			log.Printf("[OutboxSyncer] failed to mark as synced %d: %v", event.ID, markErr)
+			logger.Error("OutboxSyncer failed to mark as synced",
+				"event_id", event.ID, "error", markErr)
 		} else {
 			syncedCount++
 		}
 	}
 
 	if syncedCount > 0 {
-		log.Printf("[OutboxSyncer] successfully synced %d events in %v", syncedCount, time.Since(start))
+		logger.Info("OutboxSyncer successfully synced events",
+			"count", syncedCount,
+			slog.Duration("processing_time", time.Since(start)),
+		)
 	}
 }

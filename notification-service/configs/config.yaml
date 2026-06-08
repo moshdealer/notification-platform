@@ -11,3 +11,6 @@ database:
 nats:
   subject_new: "notifications_new"
   subject_read: "notifications.read"
+
+logs:
+  logs_level: "debug"

@@ -2,7 +2,7 @@ package router
 
 import (
 	"github.com/gin-gonic/gin"
-
+	"github.com/moshdealer/notification-platform/pkg/observability"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/websocket"
 )
 
@@ -17,7 +17,9 @@ func New(wsHandler *websocket.Handler) *Router {
 }
 
 func (r *Router) Setup() *gin.Engine {
-	engine := gin.Default()
+	engine := gin.New()
+	engine.Use(observability.LoggingMiddleware())
+	engine.Use(gin.Recovery())
 
 	// Healthcheck
 	engine.GET("/health", func(c *gin.Context) {

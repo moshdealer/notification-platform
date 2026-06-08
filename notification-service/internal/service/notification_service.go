@@ -3,12 +3,12 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/moshdealer/notification-platform/notification-service/internal/nats"
 	"github.com/moshdealer/notification-platform/notification-service/internal/repository"
 	"github.com/moshdealer/notification-platform/pkg/model"
+	"github.com/moshdealer/notification-platform/pkg/observability"
 )
 
 // NotificationService — бизнес-логика уведомлений
@@ -31,39 +31,70 @@ func NewNotificationService(
 // Create — основной сценарий: создание уведомления
 func (s *NotificationService) Create(ctx context.Context, n *model.Notification, e *model.OutboxEvent) error {
 	// 1. Сохраняем в PostgreSQL
+	logger := observability.FromContext(ctx)
+
+	logger.Info("creating notification",
+		"user_id", n.UserID,
+		"type", n.Type,
+		"priority", n.Priority,
+		"title", n.Title,
+	)
+
 	if err := s.repo.Create(ctx, n, e); err != nil {
+		logger.Error("failed to create notification in database",
+			"error", err,
+			"user_id", n.UserID,
+		)
 		return err
 	}
+
+	logger.Info("notification created successfully",
+		"notification_id", n.ID,
+		"user_id", n.UserID,
+	)
+
 	return nil
 }
 
 // MarkAsRead — обратный поток (статус "прочитано")
 func (s *NotificationService) MarkAsRead(ctx context.Context, id uint) error {
+	logger := observability.FromContext(ctx)
+
 	if err := s.repo.MarkAsRead(ctx, id); err != nil {
+		logger.Error("failed to mark notification as read",
+			"error", err,
+			"notification_id", id,
+		)
 		return err
 	}
+	logger.Debug("notification marked as read", "notification_id", id)
+
 	return nil
 }
 func (s *NotificationService) StartOutboxDispatcher(ctx context.Context) {
+	//TODO в конфиг вынести
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
-	fmt.Println("Outbox Dispatcher started (every 5 seconds)")
+	logger := observability.FromContext(ctx)
+	logger.Info("Outbox Dispatcher started", "interval", "5s")
 
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Println("Outbox Dispatcher stopped")
+			logger.Info("Outbox Dispatcher stopped")
 			return
 
 		case <-ticker.C:
 			events, err := s.repo.GetPendingOutboxEvents(ctx, 10)
 			if err != nil {
-				fmt.Printf("Failed to get pending outbox events: %v\n", err)
+				logger.Error("Failed to get pending outbox events:", "error", err)
 				continue
 			}
 
 			for _, event := range events {
+				eventLogger := logger.With("event_id", event.ID)
+
 				natsMessage := model.NatsMessage{
 					EventID: event.ID,
 					Payload: event.Payload,
@@ -71,12 +102,12 @@ func (s *NotificationService) StartOutboxDispatcher(ctx context.Context) {
 
 				if err := s.publisher.Publish(ctx, event.UserID, natsMessage); err == nil {
 					if markErr := s.repo.MarkOutboxAsSent(ctx, event.ID); markErr == nil {
-						fmt.Printf("Published outbox event %d to NATS\n", event.ID)
+						eventLogger.Info("Outbox event published to NATS")
 					} else {
-						fmt.Printf("Failed to mark event %d as sent: %v\n", event.ID, markErr)
+						eventLogger.Error("failed to mark outbox event as sent", "error", markErr)
 					}
 				} else {
-					fmt.Printf("Failed to publish event %d to NATS: %v\n", event.ID, err)
+					eventLogger.Error("Failed to publish event to NATS", "error", err)
 				}
 			}
 		}

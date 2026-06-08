@@ -4,20 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/moshdealer/notification-platform/pkg/model"
 	"time"
 
 	"github.com/moshdealer/notification-platform/pkg/config"
+	"github.com/moshdealer/notification-platform/pkg/model"
+	"github.com/moshdealer/notification-platform/pkg/observability"
 	"github.com/redis/go-redis/v9"
 )
-
-/*
-var (
-	TestTTL            = 20 * time.Second
-	UnreadSetKeyPrefix string
-	DefaultTTL         time.Duration
-	HighTTL            time.Duration
-)*/
 
 type Client struct {
 	rdb                *redis.Client
@@ -34,11 +27,7 @@ func NewClient(cfg *config.RedisCfg) *Client {
 		Password: cfg.RedisPassword,
 		DB:       0,
 	})
-	/*
-		DefaultTTL = time.Duration(cfg.DefaultTTL) * time.Second
-		HighTTL = time.Duration(cfg.HighTTL) * time.Second
-		UnreadSetKeyPrefix = cfg.UnreadKeyPrefix
-	*/
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := rdb.Ping(ctx).Err(); err != nil {
@@ -87,9 +76,12 @@ func (c *Client) AddUnread(ctx context.Context, userID string, data []byte) erro
 		pipe.Set(ctx, msgKey, data, TTL)
 	}
 
+	logger := observability.FromContext(ctx)
+
 	_, err := pipe.Exec(ctx)
 	if err == nil {
-		fmt.Printf("[Redis] Saved unread event_id=%d for user=%s (TTL=%v)\n", notificationPayload.EventID, userID, TTL)
+		logger.Info("Redis Saved unread event_id for user",
+			"event_id", notificationPayload.EventID, "user_id", userID, "TTL", TTL)
 	}
 	return err
 }
@@ -142,9 +134,11 @@ func (c *Client) RemoveUnread(ctx context.Context, userID string, eventID uint) 
 	pipe.ZRem(ctx, setKey, eventID) // удаляем из Sorted Set
 	pipe.Del(ctx, msgKey)           // удаляем само сообщение
 
+	logger := observability.FromContext(ctx)
 	_, err := pipe.Exec(ctx)
 	if err == nil {
-		fmt.Printf("[Redis] Removed delivered event_id=%d for user=%s\n", eventID, userID)
+		logger.Info("Redis removed delivered event_id for user",
+			"event_id", eventID, "user_id", userID)
 	}
 	return err
 }
@@ -155,9 +149,9 @@ func (c *Client) Close() error {
 	}
 	err := c.rdb.Close()
 	if err != nil {
-		fmt.Printf("Redis close error: %v\n", err)
+		observability.Error(context.Background(), "Redis client closed", "error", err)
 	} else {
-		fmt.Println("Redis client closed")
+		observability.Info(context.Background(), "Redis client closed")
 	}
 	return err
 }

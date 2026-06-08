@@ -38,7 +38,6 @@ func LoadNotificationService() (*ConfigNotificationService, error) {
 	v.GetString("nats.addr")
 	v.GetString("outbox_dispatcher_enabled")
 
-	fmt.Println(cfg)
 	return &cfg, nil
 }
 
@@ -74,7 +73,6 @@ func LoadWSNotifier() (*ConfigWSNotifier, error) {
 	v.GetString("redis.addr")
 	v.GetString("redis.password")
 	v.GetString("nats.addr")
-
-	fmt.Println(cfg)
+	
 	return &cfg, nil
 }
