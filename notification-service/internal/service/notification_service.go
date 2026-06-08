@@ -73,11 +73,11 @@ func (s *NotificationService) MarkAsRead(ctx context.Context, id uint) error {
 }
 func (s *NotificationService) StartOutboxDispatcher(ctx context.Context) {
 	//TODO в конфиг вынести
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	logger := observability.FromContext(ctx)
-	logger.Info("Outbox Dispatcher started", "interval", "5s")
+	logger.Info("Outbox Dispatcher started", "interval", "1s")
 
 	for {
 		select {
@@ -86,7 +86,7 @@ func (s *NotificationService) StartOutboxDispatcher(ctx context.Context) {
 			return
 
 		case <-ticker.C:
-			events, err := s.repo.GetPendingOutboxEvents(ctx, 10)
+			events, err := s.repo.GetPendingOutboxEvents(ctx, 100)
 			if err != nil {
 				logger.Error("Failed to get pending outbox events:", "error", err)
 				continue

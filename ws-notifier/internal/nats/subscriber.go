@@ -174,7 +174,8 @@ func (s *Subscriber) startRedisBroadcastListener() {
 						"error", markErr, "event_id", natsMessage.EventID)
 				}
 				s.redisClient.RemoveUnread(context.Background(), userID, eventID)
-				observability.Info(context.Background(), "Sent Message to User from Redis broadcast")
+				observability.Info(context.Background(), "Sent Message to User from Redis broadcast",
+					"user_id", userID, "event_id", eventID)
 			}
 		}
 	})

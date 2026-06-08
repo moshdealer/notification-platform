@@ -32,3 +32,5 @@ go.work.sum
 
 # Mac files
 .DS_Store
+
+*.js

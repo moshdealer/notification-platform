@@ -76,7 +76,7 @@ func (s *Syncer) syncBatch(ctx context.Context) {
 		var err error
 
 		switch event.Status {
-		case model.StatusSent: // в зависимости от твоих констант
+		case model.StatusSent:
 			err = s.repo.MarkAsSent(ctx, event.NotificationID)
 
 		case model.StatusDelivered:
