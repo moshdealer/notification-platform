@@ -43,6 +43,7 @@ func (r *outboxRepo) MarkAsDelivered(ctx context.Context, id uint) error {
 		Updates(map[string]any{
 			"status":       model.StatusDelivered,
 			"updated_at":   time.Now(),
+			"delivered_at": time.Now(),
 			"need_to_sync": true,
 		}).Error
 }
@@ -85,8 +86,9 @@ func (r *outboxRepo) MarkAsWaiting(ctx context.Context, id uint, ttl time.Durati
 	now := time.Now()
 
 	updates := map[string]any{
-		"status":     model.StatusWaiting,
-		"updated_at": now,
+		"status":       model.StatusWaiting,
+		"updated_at":   now,
+		"need_to_sync": true,
 	}
 
 	if ttl > 0 {

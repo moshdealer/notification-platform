@@ -14,39 +14,55 @@ export const options = {
         },
     },
     thresholds: {
-        ws_connected: ['count >= 95'],           // минимум 95 успешных подключений
-        messages_received: ['count >= 450'],     // минимум 450 сообщений дошло (90%)
+        ws_connected: ['count >= 95'],
+        messages_received: ['count >= 450'],
     },
 };
 
 export default function () {
-    const userId = `load-user-${__VU - 1}`; // load-user-0 ... load-user-99
+    const userId = `load-user-${__VU - 1}`;
     const url = `ws://localhost:8080/ws?user_id=${userId}&token=testtoken`;
 
     const res = ws.connect(url, {}, function (socket) {
         wsConnected.add(1);
 
         socket.on('open', () => {
-            console.log(`[${userId}] connected`);
+            console.log(JSON.stringify({
+                event: 'connected',
+                userId: userId,
+                time: new Date().toISOString()
+            }));
         });
 
         socket.on('message', (data) => {
             messagesReceived.add(1);
-            // Можно раскомментировать для отладки:
-            // console.log(`[${userId}] received: ${data}`);
+
+            // === Главное: структурированный вывод в лог ===
+            console.log(JSON.stringify({
+                event: 'message_received',
+                userId: userId,
+                time: new Date().toISOString(),
+                message: data
+            }));
         });
 
-        socket.on('close', () => console.log(`[${userId}] disconnected`));
-        socket.on('error', (e) => console.error(`[${userId}] error:`, e));
+        socket.on('close', () => {
+            console.log(JSON.stringify({
+                event: 'disconnected',
+                userId: userId,
+                time: new Date().toISOString()
+            }));
+        });
 
-        // Держим соединение открытым до конца теста
-        socket.setTimeout(() => {
-            socket.close();
-        }, 85000);
+        socket.on('error', (e) => {
+            console.error(JSON.stringify({
+                event: 'error',
+                userId: userId,
+                time: new Date().toISOString(),
+                error: String(e)
+            }));
+        });
+
+        socket.setTimeout(() => socket.close(), 85000);
     });
-
-    // Проверка, что подключение успешно установлено
-    if (res && res.status === 101) {
-        // соединение живое
-    }
 }

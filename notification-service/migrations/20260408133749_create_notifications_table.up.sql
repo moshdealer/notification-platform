@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS notifications (
     status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'delivered', 'read', 'failed', 'expired', 'waiting')),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    expired_at TIMESTAMP WITH TIME ZONE NULL
+    expired_at TIMESTAMP WITH TIME ZONE NULL,
+    delivered_at TIMESTAMP WITH TIME ZONE NULL
     );
 
 CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
@@ -30,6 +31,7 @@ CREATE TABLE outbox_events (
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NULL,
     expired_at TIMESTAMP NULL,
+    delivered_at TIMESTAMP NULL,
     need_to_sync BOOLEAN DEFAULT FALSE
 );
 
