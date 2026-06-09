@@ -22,12 +22,16 @@ func New(
 func (r *Router) Setup() *gin.Engine {
 	engine := gin.New()
 	engine.Use(observability.LoggingMiddleware())
+	engine.Use(observability.MetricsMiddleware())
 	engine.Use(gin.Recovery())
 
 	// Healthcheck
 	engine.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
+
+	// Metrics
+	engine.GET("/metrics/ns", observability.PrometheusHandler())
 
 	// Notification routes
 	notifications := engine.Group("/notifications")

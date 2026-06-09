@@ -83,7 +83,7 @@ func (h *Handler) WebSocket(c *gin.Context) {
 					"event_id", eventID,
 					"user_id", userID,
 				)
-
+				observability.NotificationsDeliveredTotal.WithLabelValues("delivered").Inc()
 			} else {
 				// Не удалось отправить
 				if markErr := h.repo.MarkAsFailed(ctx, eventID); markErr != nil {

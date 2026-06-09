@@ -19,6 +19,7 @@ func New(wsHandler *websocket.Handler) *Router {
 func (r *Router) Setup() *gin.Engine {
 	engine := gin.New()
 	engine.Use(observability.LoggingMiddleware())
+	engine.Use(observability.MetricsMiddleware())
 	engine.Use(gin.Recovery())
 
 	// Healthcheck
@@ -28,6 +29,9 @@ func (r *Router) Setup() *gin.Engine {
 			"service": "ws-notifier",
 		})
 	})
+
+	// Metrics
+	engine.GET("/metrics/ws", observability.PrometheusHandler())
 
 	// WebSocket endpoint
 	engine.GET("/ws", r.wsHandler.WebSocket)

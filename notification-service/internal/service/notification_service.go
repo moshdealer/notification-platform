@@ -53,6 +53,9 @@ func (s *NotificationService) Create(ctx context.Context, n *model.Notification,
 		"user_id", n.UserID,
 	)
 
+	observability.NotificationsCreatedTotal.WithLabelValues(n.Type, n.Priority).Inc()
+	observability.OutboxEventsTotal.WithLabelValues(e.Priority).Inc()
+
 	return nil
 }
 
@@ -103,6 +106,7 @@ func (s *NotificationService) StartOutboxDispatcher(ctx context.Context) {
 				if err := s.publisher.Publish(ctx, event.UserID, natsMessage); err == nil {
 					if markErr := s.repo.MarkOutboxAsSent(ctx, event.ID); markErr == nil {
 						eventLogger.Info("Outbox event published to NATS")
+						observability.NATSPublishedTotal.WithLabelValues(event.Priority).Inc()
 					} else {
 						eventLogger.Error("failed to mark outbox event as sent", "error", markErr)
 					}

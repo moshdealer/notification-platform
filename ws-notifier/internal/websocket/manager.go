@@ -45,6 +45,7 @@ func (m *Manager) Register(userID string, conn *websocket.Conn) *Client {
 	go client.readPump(m)
 
 	observability.Info(context.Background(), "User connected", "user_id", userID)
+	observability.WebSocketConnectionsActive.Inc()
 	return client
 }
 
@@ -63,6 +64,7 @@ func (m *Manager) Unregister(userID string, c *Client) {
 	c.once.Do(func() {
 		close(c.send)
 	})
+	observability.WebSocketConnectionsActive.Dec()
 	c.conn.Close()
 }
 
