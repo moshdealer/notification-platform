@@ -19,7 +19,7 @@ CREATE INDEX IF NOT EXISTS idx_notifications_user_status ON notifications(user_i
 CREATE INDEX IF NOT EXISTS idx_notifications_status_created ON notifications(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, read);
 
-CREATE TABLE outbox_events (
+CREATE TABLE IF NOT EXISTS outbox_events (
     id BIGSERIAL PRIMARY KEY,
     user_id VARCHAR(50) NOT NULL,
     notification_id BIGINT REFERENCES notifications(id) ON DELETE CASCADE,

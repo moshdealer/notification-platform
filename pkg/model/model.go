@@ -41,8 +41,8 @@ type OutboxEvent struct {
 	Retries        int         `gorm:"default:0" json:"retries"`
 	CreatedAt      time.Time   `gorm:"default:now()" json:"created_at"`
 	UpdatedAt      time.Time   `json:"sent_at,omitempty"`
-	ExpiredAt      time.Time   `json:"expired_at,omitempty"`
-	DeliveredAt    time.Time   `json:"delivered_at,omitempty"`
+	ExpiredAt      time.Time   `json:"expired_at,omitempty;default:null"`
+	DeliveredAt    time.Time   `json:"delivered_at,omitempty;default:null"`
 	NeedToSync     bool        `gorm:"column:need_to_sync;default:false;index:idx_outbox_need_sync"`
 }
 
