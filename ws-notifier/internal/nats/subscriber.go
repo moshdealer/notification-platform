@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/moshdealer/notification-platform/pkg/config"
 	"github.com/moshdealer/notification-platform/pkg/model"
+	"github.com/moshdealer/notification-platform/pkg/observability"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/redis"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/repository"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/websocket"
@@ -63,6 +63,8 @@ func (s *Subscriber) Start() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	logger := observability.FromContext(ctx)
+
 	consumer, err := s.js.CreateOrUpdateConsumer(ctx, s.streamName, jetstream.ConsumerConfig{
 		Durable:       "notification-service-ws",
 		AckPolicy:     jetstream.AckExplicitPolicy,
@@ -83,10 +85,9 @@ func (s *Subscriber) Start() error {
 	s.startRedisBroadcastListener()
 
 	consumeCtx, err := consumer.Consume(func(msg jetstream.Msg) {
-
 		natsMessage := model.NatsMessage{}
 		if err := json.Unmarshal(msg.Data(), &natsMessage); err != nil {
-			log.Printf("Failed to unmarshal: %v", err)
+			logger.Error("Failed to unmarshal", "error", err)
 			msg.Nak()
 			return
 		}
@@ -108,34 +109,43 @@ func (s *Subscriber) Start() error {
 		if s.wsManager.HasActiveConnections(userID) {
 			if sendErr := s.wsManager.SendToUser(userID, msg.Data()); sendErr == nil {
 				if err := s.repo.MarkAsDelivered(context.Background(), eventID); err != nil {
-					fmt.Printf("Failed to mark as delivered %d: %v\n", eventID, err)
+					logger.Warn("Failed to mark as delivered", "error", err, "event_id", eventID)
 				}
 				sentLocally = true
-				fmt.Printf("Sent Message %v to online local user %v\n", eventID, userID)
+				logger.Info("Sent Message to online local user", "user_id", userID, "event_id", eventID)
+				observability.NotificationsDeliveredTotal.WithLabelValues("delivered").Inc()
+			} else {
+				logger.Info("Try deliver via Redis", "user_id", userID, "event_id", eventID)
 			}
 		}
 
 		// 2. Сохраняем в Redis ТОЛЬКО если не отправили локально
 		if !sentLocally {
 			if addErr := s.redisClient.AddUnread(context.Background(), userID, msg.Data()); addErr != nil {
-				fmt.Printf("Failed to save to Redis for user %s: %v\n", userID, addErr)
+				logger.Error("Failed to save to Redis for user", "user_id", userID)
 				if err := s.repo.MarkAsFailed(context.Background(), eventID); err != nil {
-					fmt.Printf("Failed to mark as failed %d: %v\n", eventID, err)
+					logger.Error("Failed to mark as failed", "error", err, "event_id", eventID)
 				}
 				msg.NakWithDelay(time.Second * 15)
 				return
 			}
-			fmt.Printf("Save Message %v to Redis Cache\n", eventID)
+			logger.Info("Save Message to Redis Cache", "event_id", eventID)
 
 			if err := s.repo.MarkAsWaiting(context.Background(), eventID, ttl); err != nil {
-				fmt.Printf("Failed to mark as waiting %d: %v\n", eventID, err)
+				logger.Error("Failed to mark as waiting", "error", err, "event_id", eventID)
 			}
 
 			// 3. Публикуем в broadcast — чтобы другие ноды попробовали отправить
-			s.redisClient.PublishBroadcast(context.Background(), s.redisClient.BroadcastChannel, msg.Data())
-			fmt.Printf("Publish Message %v to broadcast\n", eventID)
+			if err := s.redisClient.PublishBroadcast(context.Background(), s.redisClient.BroadcastChannel, msg.Data()); err == nil {
+				logger.Info("Publish Message to broadcast", "event_id", eventID)
+			} else {
+				logger.Error("Failed publish Message to broadcast", "error", err)
+				msg.NakWithDelay(time.Second * 15)
+				return
+			}
 		}
 
+		observability.NATSConsumedTotal.WithLabelValues(priority).Inc()
 		msg.Ack()
 	})
 
@@ -144,7 +154,7 @@ func (s *Subscriber) Start() error {
 	}
 
 	s.cons = consumeCtx
-	fmt.Println("NATS JetStream Subscriber started with Redis Broadcast")
+	logger.Info("NATS JetStream Subscriber started with Redis Broadcast")
 	return nil
 }
 
@@ -164,10 +174,13 @@ func (s *Subscriber) startRedisBroadcastListener() {
 		if s.wsManager.HasActiveConnections(userID) {
 			if err := s.wsManager.SendToUser(userID, data); err == nil {
 				if markErr := s.repo.MarkAsDelivered(context.Background(), natsMessage.EventID); markErr != nil {
-					fmt.Printf("Failed to mark as delivered from broadcast %d: %v\n", natsMessage.EventID, markErr)
+					observability.Error(context.Background(), "Failed to mark as delivered from broadcast",
+						"error", markErr, "event_id", natsMessage.EventID)
 				}
 				s.redisClient.RemoveUnread(context.Background(), userID, eventID)
-				fmt.Println("Sent Message to User from Redis broadcast")
+				observability.Info(context.Background(), "Sent Message to User from Redis broadcast",
+					"user_id", userID, "event_id", eventID)
+				observability.NotificationsDeliveredTotal.WithLabelValues("delivered").Inc()
 			}
 		}
 	})
@@ -181,5 +194,5 @@ func (s *Subscriber) Close() {
 	if s.nc != nil {
 		s.nc.Close()
 	}
-	fmt.Println("NATS JetStream Subscriber closed")
+	observability.Info(context.Background(), "NATS JetStream Subscriber closed")
 }

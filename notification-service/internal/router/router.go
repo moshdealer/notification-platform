@@ -4,6 +4,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/moshdealer/notification-platform/notification-service/internal/handler"
+	"github.com/moshdealer/notification-platform/pkg/observability"
 )
 
 type Router struct {
@@ -19,12 +20,18 @@ func New(
 }
 
 func (r *Router) Setup() *gin.Engine {
-	engine := gin.Default()
+	engine := gin.New()
+	engine.Use(observability.LoggingMiddleware())
+	engine.Use(observability.MetricsMiddleware())
+	engine.Use(gin.Recovery())
 
 	// Healthcheck
 	engine.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
+
+	// Metrics
+	engine.GET("/metrics/ns", observability.PrometheusHandler())
 
 	// Notification routes
 	notifications := engine.Group("/notifications")

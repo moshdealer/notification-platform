@@ -6,6 +6,7 @@ type ConfigNotificationService struct {
 	Server                  ServerCfg   `mapstructure:"server"`
 	Database                DatabaseCfg `mapstructure:"database"`
 	NATS                    NATSCfg     `mapstructure:"nats"`
+	LogsCfg                 LogCfg      `mapstructure:"logs"`
 	OutboxDispatcherEnabled bool        `mapstructure:"outbox_dispatcher_enabled"`
 }
 
@@ -14,6 +15,7 @@ type ConfigWSNotifier struct {
 	Database DatabaseCfg `mapstructure:"database"`
 	Redis    RedisCfg    `mapstructure:"redis"`
 	NATS     NATSCfg     `mapstructure:"nats"`
+	LogsCfg  LogCfg      `mapstructure:"logs"`
 }
 type ServerCfg struct {
 	Port         string        `mapstructure:"port"`
@@ -43,4 +45,8 @@ type NATSCfg struct {
 	NATSAddr    string `mapstructure:"addr"`
 	SubjectNew  string `mapstructure:"subject_new"`
 	SubjectRead string `mapstructure:"subject_read"`
+}
+
+type LogCfg struct {
+	LogLevel string `mapstructure:"logs_level"`
 }

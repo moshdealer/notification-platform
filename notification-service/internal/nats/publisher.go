@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/moshdealer/notification-platform/pkg/model"
+	"github.com/moshdealer/notification-platform/pkg/observability"
 	"time"
 
 	"github.com/moshdealer/notification-platform/pkg/config"
@@ -34,7 +35,10 @@ func NewPublisher(cfg *config.NATSCfg) (*Publisher, error) {
 		return nil, fmt.Errorf("failed to create JetStream context: %w", err)
 	}
 
-	fmt.Printf("NATS JetStream Publisher connected to %s\n", cfg.NATSAddr)
+	observability.Info(context.Background(), "NATS JetStream Publisher connected",
+		"address", cfg.NATSAddr,
+		"subject_prefix", cfg.SubjectNew,
+	)
 
 	return &Publisher{
 		js:      js,
@@ -65,5 +69,5 @@ func (p *Publisher) GetJetStream() jetstream.JetStream {
 }
 
 func (p *Publisher) Close() {
-	fmt.Println("NATS JetStream Publisher closed")
+	observability.Info(context.Background(), "NATS JetStream Publisher closed")
 }

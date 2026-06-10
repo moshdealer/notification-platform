@@ -32,3 +32,6 @@ go.work.sum
 
 # Mac files
 .DS_Store
+
+# Logs
+.log

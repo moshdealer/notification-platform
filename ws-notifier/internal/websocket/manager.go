@@ -1,10 +1,12 @@
 package websocket
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
 	"github.com/gorilla/websocket"
+	"github.com/moshdealer/notification-platform/pkg/observability"
 )
 
 type Client struct {
@@ -42,7 +44,8 @@ func (m *Manager) Register(userID string, conn *websocket.Conn) *Client {
 	go client.writePump(m)
 	go client.readPump(m)
 
-	fmt.Printf("[WS] User %s connected\n", userID)
+	observability.Info(context.Background(), "User connected", "user_id", userID)
+	observability.WebSocketConnectionsActive.Inc()
 	return client
 }
 
@@ -54,13 +57,14 @@ func (m *Manager) Unregister(userID string, c *Client) {
 		delete(conns, c)
 		if len(conns) == 0 {
 			delete(m.clients, userID)
-			fmt.Printf("[WS] User %s fully disconnected\n", userID)
+			observability.Info(context.Background(), "User fully disconnected", "user_id", userID)
 		}
 	}
 
 	c.once.Do(func() {
 		close(c.send)
 	})
+	observability.WebSocketConnectionsActive.Dec()
 	c.conn.Close()
 }
 
@@ -131,5 +135,5 @@ func (m *Manager) CloseAll() {
 
 	m.clients = make(map[string]map[*Client]bool)
 
-	fmt.Println("[WS] All WebSocket connections closed")
+	observability.Info(context.Background(), "WS All WebSocket connections closed")
 }

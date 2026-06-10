@@ -155,6 +155,7 @@ func (r *notificationRepo) MarkOutboxAsSent(ctx context.Context, id uint) error 
 	err := r.db.WithContext(ctx).
 		Model(&model.OutboxEvent{}).
 		Where("id = ?", id).
+		Where("status = ?", model.StatusPending).
 		Updates(map[string]any{
 			"status":       model.StatusSent,
 			"updated_at":   time.Now(),

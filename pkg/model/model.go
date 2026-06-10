@@ -15,18 +15,19 @@ const (
 )
 
 type Notification struct {
-	ID        uint           `gorm:"primaryKey;autoIncrement" json:"id"`
-	UserID    string         `gorm:"column:user_id;type:varchar(50);not null;index" json:"user_id"`
-	Title     string         `gorm:"type:varchar(255);not null" json:"title"`
-	Body      string         `gorm:"type:text" json:"body"`
-	Type      string         `gorm:"type:varchar(50);not null;index" json:"type"`
-	Priority  string         `gorm:"type:varchar(20);default:medium;index" json:"priority"`
-	Data      map[string]any `gorm:"type:jsonb" json:"data,omitempty"`
-	Status    string         `gorm:"type:varchar(20);not null;default:pending;index" json:"status"`
-	Read      bool           `gorm:"default:false;index" json:"read"`
-	CreatedAt time.Time      `gorm:"type:timestamptz;default:now();index" json:"created_at"`
-	UpdatedAt time.Time      `gorm:"type:timestamptz;default:now()" json:"updated_at"`
-	ExpiredAt time.Time      `gorm:"type:timestamptz;default:null"`
+	ID          uint           `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID      string         `gorm:"column:user_id;type:varchar(50);not null;index" json:"user_id"`
+	Title       string         `gorm:"type:varchar(255);not null" json:"title"`
+	Body        string         `gorm:"type:text" json:"body"`
+	Type        string         `gorm:"type:varchar(50);not null;index" json:"type"`
+	Priority    string         `gorm:"type:varchar(20);default:medium;index" json:"priority"`
+	Data        map[string]any `gorm:"type:jsonb" json:"data,omitempty"`
+	Status      string         `gorm:"type:varchar(20);not null;default:pending;index" json:"status"`
+	Read        bool           `gorm:"default:false;index" json:"read"`
+	CreatedAt   time.Time      `gorm:"type:timestamptz;default:now();index" json:"created_at"`
+	UpdatedAt   time.Time      `gorm:"type:timestamptz;default:now()" json:"updated_at"`
+	ExpiredAt   time.Time      `gorm:"type:timestamptz;default:null"`
+	DeliveredAt time.Time      `gorm:"type:timestamptz;default:null" json:"delivered_at"`
 }
 
 type OutboxEvent struct {
@@ -40,7 +41,8 @@ type OutboxEvent struct {
 	Retries        int         `gorm:"default:0" json:"retries"`
 	CreatedAt      time.Time   `gorm:"default:now()" json:"created_at"`
 	UpdatedAt      time.Time   `json:"sent_at,omitempty"`
-	ExpiredAt      time.Time   `json:"expired_at_at,omitempty"`
+	ExpiredAt      time.Time   `json:"expired_at,omitempty;default:null"`
+	DeliveredAt    time.Time   `json:"delivered_at,omitempty;default:null"`
 	NeedToSync     bool        `gorm:"column:need_to_sync;default:false;index:idx_outbox_need_sync"`
 }
 

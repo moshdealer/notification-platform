@@ -12,7 +12,6 @@ import (
 func CreateNotificationsStream(js jetstream.JetStream, cfg config.NATSCfg) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	fmt.Sprintf("%v.>", cfg.SubjectNew)
 	_, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
 		Name:     cfg.SubjectNew,
 		Subjects: []string{fmt.Sprintf("%v.>", cfg.SubjectNew)},
