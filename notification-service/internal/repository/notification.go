@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"time"
 
 	"github.com/moshdealer/notification-platform/pkg/model"
@@ -19,9 +20,11 @@ type NotificationRepository interface {
 	MarkAsWaiting(ctx context.Context, id uint) error
 	MarkAsFailed(ctx context.Context, id uint) error
 	GetPendingOutboxEvents(ctx context.Context, limit int) ([]model.OutboxEvent, error)
+	ClaimPendingOutboxEvents(ctx context.Context, limit int) ([]model.OutboxEvent, error)
 	MarkOutboxAsSent(ctx context.Context, id uint) error
 	GetOutboxEventsForSync(ctx context.Context, limit int) ([]model.OutboxEvent, error)
 	MarkOutboxAsSynced(ctx context.Context, outboxID uint) error
+	IncrementSendAttempts(ctx context.Context, id uint) error
 }
 
 type notificationRepo struct {
@@ -133,7 +136,7 @@ func (r *notificationRepo) MarkAsWaiting(ctx context.Context, id uint) error {
 		Updates(updates).Error
 }
 
-// GetPendingOutboxEvents возвращает события, которые ещё не отправлены в NATS
+// GetPendingOutboxEvents возвращает события, которые ещё не отправлены в NATS (рудимент, актуален только если воркер 1)
 func (r *notificationRepo) GetPendingOutboxEvents(ctx context.Context, limit int) ([]model.OutboxEvent, error) {
 	var events []model.OutboxEvent
 
@@ -148,6 +151,43 @@ func (r *notificationRepo) GetPendingOutboxEvents(ctx context.Context, limit int
 	}
 
 	return events, nil
+}
+
+// ClaimPendingOutboxEvents - безопасное забирание событий (для нескольких воркеров)
+func (r *notificationRepo) ClaimPendingOutboxEvents(ctx context.Context, limit int) ([]model.OutboxEvent, error) {
+	var events []model.OutboxEvent
+
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 1. Забираем с блокировкой
+		if err := tx.Clauses(clause.Locking{
+			Strength: "UPDATE",
+			Options:  "SKIP LOCKED",
+		}).
+			Where("status = ?", model.StatusPending).
+			Order("created_at ASC").
+			Limit(limit).
+			Find(&events).Error; err != nil {
+			return err
+		}
+
+		if len(events) == 0 {
+			return nil
+		}
+
+		// 2. Сразу помечаем как sent (для избежания гонки и дублирования нотификаций)
+		ids := make([]uint, len(events))
+		for i, e := range events {
+			ids[i] = e.ID
+		}
+
+		return tx.Model(&model.OutboxEvent{}).
+			Where("id IN ?", ids).
+			Updates(map[string]any{
+				"status": model.StatusSent,
+			}).Error
+	})
+
+	return events, err
 }
 
 // MarkOutboxAsSent помечает событие как успешно отправленное
@@ -189,4 +229,11 @@ func (r *notificationRepo) MarkOutboxAsSynced(ctx context.Context, outboxID uint
 		Model(&model.OutboxEvent{}).
 		Where("id = ?", outboxID).
 		Update("need_to_sync", false).Error
+}
+
+func (r *notificationRepo) IncrementSendAttempts(ctx context.Context, id uint) error {
+	return r.db.WithContext(ctx).
+		Model(&model.OutboxEvent{}).
+		Where("id = ?", id).
+		UpdateColumn("send_attempts", gorm.Expr("send_attempts + 1")).Error
 }

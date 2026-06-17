@@ -21,10 +21,15 @@ import (
 	"github.com/moshdealer/notification-platform/pkg/observability"
 )
 
-//TODO убрать ненужные комментарии
-// Контексты и graceful shutdown
-// докер оптимизировать
-// рефакторинг всего как будет работать
+/*
+Notification-service - сервис, который принимает по REST запросы на отправку нотификаций пользователям
+Запросы обрабатываются пачками n-количеством worker'ов и отправляются в Nats
+*/
+
+//TODO
+// - докер оптимизировать
+// - Сделать поддержку смены outbox dispatcher'ов
+// - убрать ненужные комментарии
 
 type App struct {
 	Config              *config.ConfigNotificationService
@@ -39,23 +44,26 @@ func main() {
 	// 1. Загружаем конфиг
 	cfg, err := config.LoadNotificationService()
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Load load error: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "Load cfg error: %v\n", err)
 		os.Exit(1)
 	}
 
 	observability.Init(cfg.LogsCfg)
+
+	appCtx := observability.WithLogger(context.Background(), observability.FromContext(context.Background()))
+
 	// TODO Логирую конфиг специально для удобства отладки, для боя убрать
-	observability.Debug(context.Background(), "Config has been loaded:", "config", cfg)
+	observability.Debug(appCtx, "Config has been loaded:", "config", cfg)
 
 	// 2. Подключаем БД + миграции
 	dbConn, err := db.Connect(&cfg.Database)
 	if err != nil {
-		observability.Error(context.Background(), "DB connect error", "error", err)
+		observability.Error(appCtx, "DB connect error", "error", err)
 		os.Exit(1)
 	}
 	err = db.Migrate(&cfg.Database)
 	if err != nil {
-		observability.Error(context.Background(), "Migrate error", "error", err)
+		observability.Error(appCtx, "Migrate error", "error", err)
 		os.Exit(1)
 	}
 
@@ -71,12 +79,12 @@ func main() {
 	// 5. NATS Publisher
 	app.NATSPublisher, err = nats.NewPublisher(&app.Config.NATS)
 	if err != nil {
-		observability.Error(context.Background(), "NATS Publisher connect error", "error", err)
+		observability.Error(appCtx, "NATS Publisher connect error", "error", err)
 		os.Exit(1)
 	}
 
 	if err := nats.CreateNotificationsStream(app.NATSPublisher.GetJetStream(), cfg.NATS); err != nil {
-		observability.Error(context.Background(), "Failed to create JetStream stream:", "error", err)
+		observability.Error(appCtx, "Failed to create JetStream stream:", "error", err)
 		os.Exit(1)
 	}
 
@@ -90,25 +98,22 @@ func main() {
 		100,
 	)
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	rootCtx, stop := signal.NotifyContext(appCtx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	// Запускаем outbox dispatcher (отправка событий в NATS)
-
-	dispatcherCtx := observability.WithLogger(ctx, observability.FromContext(ctx))
 	if app.Config.OutboxDispatcherEnabled {
-		observability.Info(dispatcherCtx, "[Outbox] Starting background workers",
+		observability.Info(rootCtx, "[Outbox] Starting background workers",
 			"workers", []string{"OutboxDispatcher", "OutboxSyncer"},
 		)
-		go app.NotificationService.StartOutboxDispatcher(dispatcherCtx)
-		go app.OutboxSyncer.Run(dispatcherCtx)
+		go app.NotificationService.StartOutboxDispatcher(rootCtx, 4)
+		go app.OutboxSyncer.Run(rootCtx)
 	} else {
-		observability.Info(context.Background(), "[Outbox] Running in API-only mode (background workers disabled)")
+		observability.Info(rootCtx, "[Outbox] Running in API-only mode (background workers disabled)")
 	}
 
-	// HTTP сервер
+	// Запуск HTTP сервер
 	notificationHandler := handler.NewNotificationHandler(app.NotificationService)
-
 	r := router.New(notificationHandler)
 	engine := r.Setup()
 
@@ -119,27 +124,42 @@ func main() {
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			observability.Error(context.Background(), "Server error", "error", err)
+			observability.Error(rootCtx, "Server error", "error", err)
 		}
 	}()
 
-	observability.Info(context.Background(), "Notification service started",
+	observability.Info(rootCtx, "Notification service started",
 		"port", app.Config.Server.Port,
 	)
 
-	<-ctx.Done()
-	observability.Info(context.Background(), "Shutting down Notification service...")
+	<-rootCtx.Done()
 
+	// Shutdown
+	observability.Info(appCtx, "Shutting down Notification service...")
+
+	// Закрытие NATS
 	if app.NATSPublisher != nil {
 		app.NATSPublisher.Close()
 	}
 
+	// Закрытие HTTP
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		observability.Error(context.Background(), "Shutdown error", "error", err)
+		observability.Error(appCtx, "Shutdown error", "error", err)
 	}
 
-	observability.Info(context.Background(), "Service stopped gracefully")
+	// Закрытие БД
+	if app.DB != nil {
+		if sqlDB, err := app.DB.DB(); err == nil {
+			if closeErr := sqlDB.Close(); closeErr != nil {
+				observability.Error(appCtx, "Failed to close database connection", "error", closeErr)
+			} else {
+				observability.Info(appCtx, "Database connection closed")
+			}
+		}
+	}
+
+	observability.Info(appCtx, "Service stopped gracefully")
 }

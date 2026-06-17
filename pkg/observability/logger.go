@@ -78,7 +78,7 @@ func WithLogger(ctx context.Context, logger *slog.Logger) context.Context {
 	return context.WithValue(ctx, loggerKey, logger)
 }
 
-// LoggingMiddleware — Gin middleware
+// LoggingMiddleware - Gin middleware
 // Добавляет request_id, обогащает контекст логгером и логирует запросы
 func LoggingMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {

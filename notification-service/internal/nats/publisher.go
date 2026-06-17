@@ -4,16 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/moshdealer/notification-platform/pkg/model"
-	"github.com/moshdealer/notification-platform/pkg/observability"
 	"time"
 
 	"github.com/moshdealer/notification-platform/pkg/config"
+	"github.com/moshdealer/notification-platform/pkg/model"
+	"github.com/moshdealer/notification-platform/pkg/observability"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
 type Publisher struct {
+	nc      *nats.Conn
 	js      jetstream.JetStream
 	subject string
 }
@@ -32,6 +33,7 @@ func NewPublisher(cfg *config.NATSCfg) (*Publisher, error) {
 
 	js, err := jetstream.New(nc)
 	if err != nil {
+		nc.Close()
 		return nil, fmt.Errorf("failed to create JetStream context: %w", err)
 	}
 
@@ -41,6 +43,7 @@ func NewPublisher(cfg *config.NATSCfg) (*Publisher, error) {
 	)
 
 	return &Publisher{
+		nc:      nc,
 		js:      js,
 		subject: cfg.SubjectNew,
 	}, nil
@@ -55,7 +58,7 @@ func (p *Publisher) Publish(ctx context.Context, userId string, message model.Na
 
 	subject := fmt.Sprintf("%s.%s", p.subject, userId)
 	msgID := fmt.Sprintf("notif-%d", message.EventID)
-	// Publish с ожиданием Ack от стрима
+
 	_, err = p.js.Publish(ctx, subject, data, jetstream.WithMsgID(msgID))
 	if err != nil {
 		return fmt.Errorf("failed to publish to %s: %w", subject, err)
@@ -69,5 +72,11 @@ func (p *Publisher) GetJetStream() jetstream.JetStream {
 }
 
 func (p *Publisher) Close() {
+	if p.nc != nil {
+		// Используем Drain - более корректное закрытие
+		if err := p.nc.Drain(); err != nil {
+			observability.Error(context.Background(), "Error draining NATS connection", "error", err)
+		}
+	}
 	observability.Info(context.Background(), "NATS JetStream Publisher closed")
 }

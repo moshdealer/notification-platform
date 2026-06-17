@@ -94,7 +94,7 @@ func (r *outboxRepo) MarkAsWaiting(ctx context.Context, id uint, ttl time.Durati
 	if ttl > 0 {
 		updates["expired_at"] = now.Add(ttl)
 	} else {
-		// Для high-priority — никогда не истекает
+		// Для high-priority никогда не истекает
 		updates["expired_at"] = nil
 	}
 

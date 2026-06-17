@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS outbox_events (
     updated_at TIMESTAMP NULL,
     expired_at TIMESTAMP NULL,
     delivered_at TIMESTAMP NULL,
+    send_attempts INTEGER NOT NULL DEFAULT 0,
     need_to_sync BOOLEAN DEFAULT FALSE
 );
 

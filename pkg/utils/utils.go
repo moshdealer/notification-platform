@@ -46,7 +46,7 @@ func ExtractPriority(data []byte) string {
 		return strings.ToLower(strings.TrimSpace(o.Payload.Priority))
 	}
 
-	// Если priority не нашли в payload — попробуем на верхнем уровне (на всякий случай)
+	// Если priority не нашли в payload - попробуем на верхнем уровне (на всякий случай)
 	type fallback struct {
 		Priority string `json:"priority"`
 	}
