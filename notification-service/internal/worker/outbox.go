@@ -60,7 +60,7 @@ func (s *Syncer) syncBatch(ctx context.Context) {
 	logger := observability.FromContext(ctx)
 
 	// Получаем события, которые нужно синхронизировать
-	events, err := s.repo.GetOutboxEventsForSync(context.Background(), s.batchSize)
+	events, err := s.repo.GetOutboxEventsForSync(ctx, s.batchSize)
 	if err != nil {
 		logger.Error("GetOutboxEventsForSync error", "error", err)
 		return
@@ -82,7 +82,7 @@ func (s *Syncer) syncBatch(ctx context.Context) {
 		case model.StatusDelivered:
 			err = s.repo.MarkAsDelivered(ctx, event.NotificationID)
 
-		case model.StatusRead: // в зависимости от твоих констант
+		case model.StatusRead:
 			err = s.repo.MarkAsRead(ctx, event.NotificationID)
 
 		case model.StatusFailed:
@@ -102,7 +102,7 @@ func (s *Syncer) syncBatch(ctx context.Context) {
 			continue
 		}
 
-		if markErr := s.repo.MarkOutboxAsSynced(context.Background(), event.ID); markErr != nil {
+		if markErr := s.repo.MarkOutboxAsSynced(ctx, event.ID); markErr != nil {
 			logger.Error("OutboxSyncer failed to mark as synced",
 				"event_id", event.ID, "error", markErr)
 		} else {

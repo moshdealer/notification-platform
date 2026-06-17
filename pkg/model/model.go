@@ -43,6 +43,7 @@ type OutboxEvent struct {
 	UpdatedAt      time.Time   `json:"sent_at,omitempty"`
 	ExpiredAt      time.Time   `json:"expired_at,omitempty;default:null"`
 	DeliveredAt    time.Time   `json:"delivered_at,omitempty;default:null"`
+	SendAttempts   int         `gorm:"column:send_attempts;default:0" json:"send_attempts"`
 	NeedToSync     bool        `gorm:"column:need_to_sync;default:false;index:idx_outbox_need_sync"`
 }
 

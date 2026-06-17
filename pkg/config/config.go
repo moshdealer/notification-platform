@@ -58,6 +58,7 @@ func LoadWSNotifier() (*ConfigWSNotifier, error) {
 	_ = v.BindEnv("redis.addr", "REDIS_ADDR")
 	_ = v.BindEnv("redis.password", "REDIS_PASSWORD")
 	_ = v.BindEnv("nats.addr", "NATS_ADDR")
+	_ = v.BindEnv("nats.node_name", "NATS_NODE_NAME")
 
 	// Считали yaml-конфиг
 	if err := v.ReadInConfig(); err != nil {
@@ -73,6 +74,6 @@ func LoadWSNotifier() (*ConfigWSNotifier, error) {
 	v.GetString("redis.addr")
 	v.GetString("redis.password")
 	v.GetString("nats.addr")
-	
+
 	return &cfg, nil
 }

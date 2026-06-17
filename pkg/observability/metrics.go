@@ -55,6 +55,23 @@ var (
 		},
 		[]string{"priority"},
 	)
+
+	NatsPublishDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "notification_nats_publish_duration_seconds", // Время публикации одного события в NATS (включая ожидание ack)
+		Help:    "Duration of JetStream Publish call (with server ack)",
+		Buckets: prometheus.ExponentialBuckets(0.001, 2, 12), // от 1мс до ~4 сек
+	}, []string{"worker_id"})
+
+	OutboxClaimDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "notification_outbox_claim_duration_seconds", // Время выполнения Claim
+		Help:    "Duration of ClaimPendingOutboxEvents query",
+		Buckets: prometheus.ExponentialBuckets(0.001, 2, 12),
+	}, []string{"worker_id"})
+
+	OutboxPendingGauge = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "notification_outbox_pending_events", // Текущее количество pending событий в outbox
+		Help: "Current number of pending events in outbox_events table",
+	})
 )
 
 // Ws-notifier

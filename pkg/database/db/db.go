@@ -13,7 +13,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// Connect — только подключение (используется везде)
+// Connect - только подключение (используется везде)
 func Connect(dbCfg *config.DatabaseCfg) (*gorm.DB, error) {
 	dsn := dbCfg.DatabaseDSN
 	if dsn == "" {
@@ -39,12 +39,12 @@ func Connect(dbCfg *config.DatabaseCfg) (*gorm.DB, error) {
 	if err := sqlDB.Ping(); err != nil {
 		return nil, fmt.Errorf("failed to ping DB: %w", err)
 	}
-	
+
 	log.Println("Successfully connected to PostgreSQL")
 	return db, nil
 }
 
-// Migrate — использует отдельное соединение, чтобы не ломать основной пул
+// Migrate - использует отдельное соединение, чтобы не ломать основной пул
 func Migrate(dbCfg *config.DatabaseCfg) error {
 	migrateConn, err := Connect(dbCfg)
 	if err != nil {

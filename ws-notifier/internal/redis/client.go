@@ -86,7 +86,7 @@ func (c *Client) AddUnread(ctx context.Context, userID string, data []byte) erro
 	return err
 }
 
-// GetUnread — возвращает в правильном порядке
+// GetUnread - возвращает в правильном порядке
 func (c *Client) GetUnread(ctx context.Context, userID string) ([][]byte, error) {
 	setKey := fmt.Sprintf(c.UnreadSetKeyPrefix, userID)
 
@@ -107,7 +107,7 @@ func (c *Client) GetUnread(ctx context.Context, userID string) ([][]byte, error)
 	}
 
 	// Чистим после отправки
-	go c.ClearAllUnread(context.Background(), userID)
+	go c.ClearAllUnread(ctx, userID)
 
 	return result, nil
 }

@@ -25,6 +25,9 @@ type Subscriber struct {
 	repo             repository.OutBoxRepository
 	streamName       string
 	filterStreamName string
+	nodeName         string
+	rootCtx          context.Context
+	cancel           context.CancelFunc
 }
 
 func NewSubscriber(
@@ -32,7 +35,14 @@ func NewSubscriber(
 	wm *websocket.Manager,
 	rc *redis.Client,
 	repo repository.OutBoxRepository,
+	rootCtx context.Context,
 ) (*Subscriber, error) {
+	if rootCtx == nil {
+		rootCtx = context.Background()
+	}
+
+	ctx, cancel := context.WithCancel(rootCtx)
+
 	nc, err := nats.Connect(cfg.NATSAddr,
 		nats.Name("ws-notifier-subscriber"),
 		nats.MaxReconnects(-1),
@@ -56,20 +66,24 @@ func NewSubscriber(
 		repo:             repo,
 		streamName:       cfg.SubjectNew,
 		filterStreamName: filterStreamName,
+		nodeName:         cfg.NodeName,
+		rootCtx:          ctx,
+		cancel:           cancel,
 	}, nil
 }
 
 func (s *Subscriber) Start() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	createCtx, cancel := context.WithTimeout(s.rootCtx, 30*time.Second)
 	defer cancel()
 
-	logger := observability.FromContext(ctx)
+	logger := observability.FromContext(createCtx)
 
-	consumer, err := s.js.CreateOrUpdateConsumer(ctx, s.streamName, jetstream.ConsumerConfig{
+	consumer, err := s.js.CreateOrUpdateConsumer(createCtx, s.streamName, jetstream.ConsumerConfig{
+		Name:          "notification-service-ws",
 		Durable:       "notification-service-ws",
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		MaxDeliver:    30,
-		AckWait:       60 * time.Second,
+		AckWait:       30 * time.Second,
 		FilterSubject: s.filterStreamName,
 		BackOff: []time.Duration{
 			1 * time.Second,
@@ -85,6 +99,11 @@ func (s *Subscriber) Start() error {
 	s.startRedisBroadcastListener()
 
 	consumeCtx, err := consumer.Consume(func(msg jetstream.Msg) {
+		msgCtx, msgCancel := context.WithTimeout(s.rootCtx, 10*time.Second)
+		defer msgCancel()
+
+		logger = observability.FromContext(msgCtx)
+
 		natsMessage := model.NatsMessage{}
 		if err := json.Unmarshal(msg.Data(), &natsMessage); err != nil {
 			logger.Error("Failed to unmarshal", "error", err)
@@ -107,8 +126,8 @@ func (s *Subscriber) Start() error {
 
 		// 1. Пытаемся отправить локально
 		if s.wsManager.HasActiveConnections(userID) {
-			if sendErr := s.wsManager.SendToUser(userID, msg.Data()); sendErr == nil {
-				if err := s.repo.MarkAsDelivered(context.Background(), eventID); err != nil {
+			if sendErr := s.wsManager.SendToUser(msgCtx, userID, msg.Data()); sendErr == nil {
+				if err := s.repo.MarkAsDelivered(msgCtx, eventID); err != nil {
 					logger.Warn("Failed to mark as delivered", "error", err, "event_id", eventID)
 				}
 				sentLocally = true
@@ -121,9 +140,9 @@ func (s *Subscriber) Start() error {
 
 		// 2. Сохраняем в Redis ТОЛЬКО если не отправили локально
 		if !sentLocally {
-			if addErr := s.redisClient.AddUnread(context.Background(), userID, msg.Data()); addErr != nil {
+			if addErr := s.redisClient.AddUnread(msgCtx, userID, msg.Data()); addErr != nil {
 				logger.Error("Failed to save to Redis for user", "user_id", userID)
-				if err := s.repo.MarkAsFailed(context.Background(), eventID); err != nil {
+				if err := s.repo.MarkAsFailed(msgCtx, eventID); err != nil {
 					logger.Error("Failed to mark as failed", "error", err, "event_id", eventID)
 				}
 				msg.NakWithDelay(time.Second * 15)
@@ -131,12 +150,12 @@ func (s *Subscriber) Start() error {
 			}
 			logger.Info("Save Message to Redis Cache", "event_id", eventID)
 
-			if err := s.repo.MarkAsWaiting(context.Background(), eventID, ttl); err != nil {
+			if err := s.repo.MarkAsWaiting(msgCtx, eventID, ttl); err != nil {
 				logger.Error("Failed to mark as waiting", "error", err, "event_id", eventID)
 			}
 
-			// 3. Публикуем в broadcast — чтобы другие ноды попробовали отправить
-			if err := s.redisClient.PublishBroadcast(context.Background(), s.redisClient.BroadcastChannel, msg.Data()); err == nil {
+			// 3. Публикуем в broadcast, чтобы другие ноды попробовали отправить
+			if err := s.redisClient.PublishBroadcast(msgCtx, s.redisClient.BroadcastChannel, msg.Data()); err == nil {
 				logger.Info("Publish Message to broadcast", "event_id", eventID)
 			} else {
 				logger.Error("Failed publish Message to broadcast", "error", err)
@@ -161,7 +180,10 @@ func (s *Subscriber) Start() error {
 // TODO  навести порядок в слоях, это нужно в другой модуль вынести
 // Слушаем broadcast от других нод
 func (s *Subscriber) startRedisBroadcastListener() {
-	s.redisClient.SubscribeBroadcast(context.Background(), s.redisClient.BroadcastChannel, func(data []byte) {
+	s.redisClient.SubscribeBroadcast(s.rootCtx, s.redisClient.BroadcastChannel, func(data []byte) {
+		bcCtx, bcCancel := context.WithTimeout(s.rootCtx, 5*time.Second)
+		defer bcCancel()
+
 		var natsMessage model.NatsMessage
 		if err := json.Unmarshal(data, &natsMessage); err != nil {
 			return
@@ -172,13 +194,13 @@ func (s *Subscriber) startRedisBroadcastListener() {
 
 		// Отправляем, только если юзер онлайн именно на этой ноде
 		if s.wsManager.HasActiveConnections(userID) {
-			if err := s.wsManager.SendToUser(userID, data); err == nil {
-				if markErr := s.repo.MarkAsDelivered(context.Background(), natsMessage.EventID); markErr != nil {
-					observability.Error(context.Background(), "Failed to mark as delivered from broadcast",
+			if err := s.wsManager.SendToUser(bcCtx, userID, data); err == nil {
+				if markErr := s.repo.MarkAsDelivered(bcCtx, natsMessage.EventID); markErr != nil {
+					observability.Error(bcCtx, "Failed to mark as delivered from broadcast",
 						"error", markErr, "event_id", natsMessage.EventID)
 				}
-				s.redisClient.RemoveUnread(context.Background(), userID, eventID)
-				observability.Info(context.Background(), "Sent Message to User from Redis broadcast",
+				s.redisClient.RemoveUnread(bcCtx, userID, eventID)
+				observability.Info(bcCtx, "Sent Message to User from Redis broadcast",
 					"user_id", userID, "event_id", eventID)
 				observability.NotificationsDeliveredTotal.WithLabelValues("delivered").Inc()
 			}
@@ -187,6 +209,10 @@ func (s *Subscriber) startRedisBroadcastListener() {
 }
 
 func (s *Subscriber) Close() {
+	if s.cancel != nil {
+		s.cancel()
+	}
+
 	if s.cons != nil {
 		s.cons.Stop()
 		s.cons = nil
@@ -194,5 +220,5 @@ func (s *Subscriber) Close() {
 	if s.nc != nil {
 		s.nc.Close()
 	}
-	observability.Info(context.Background(), "NATS JetStream Subscriber closed")
+	observability.Info(s.rootCtx, "NATS JetStream Subscriber closed")
 }

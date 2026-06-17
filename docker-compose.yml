@@ -28,6 +28,7 @@ services:
         condition: service_healthy
     environment:
       - SERVER_PORT=8081
+      - NATS_NODE_NAME=1
     restart: unless-stopped
 
   ws-notifier-2:
@@ -45,6 +46,7 @@ services:
         condition: service_healthy
     environment:
       - SERVER_PORT=8081
+      - NATS_NODE_NAME=2
     restart: unless-stopped
 
   ws-notifier-3:
@@ -62,6 +64,43 @@ services:
         condition: service_healthy
     environment:
       - SERVER_PORT=8081
+      - NATS_NODE_NAME=3
+    restart: unless-stopped
+
+  ws-notifier-4:
+    build:
+      context: .
+      dockerfile: ./ws-notifier/Dockerfile
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+      notification-service-1:
+        condition: service_healthy
+    environment:
+      - SERVER_PORT=8081
+      - NATS_NODE_NAME=4
+    restart: unless-stopped
+
+  ws-notifier-5:
+    build:
+      context: .
+      dockerfile: ./ws-notifier/Dockerfile
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+      notification-service-1:
+        condition: service_healthy
+    environment:
+      - SERVER_PORT=8081
+      - NATS_NODE_NAME=5
     restart: unless-stopped
 
   notification-service-1:
@@ -86,6 +125,51 @@ services:
       start_period: 5s
 
   notification-service-2:
+    build:
+      context: .
+      dockerfile: ./notification-service/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - NS_OUTBOX_DISPATCHER_ENABLED=false
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    restart: unless-stopped
+
+  notification-service-3:
+    build:
+      context: .
+      dockerfile: ./notification-service/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - NS_OUTBOX_DISPATCHER_ENABLED=false
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    restart: unless-stopped
+
+  notification-service-4:
+    build:
+      context: .
+      dockerfile: ./notification-service/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - NS_OUTBOX_DISPATCHER_ENABLED=false
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    restart: unless-stopped
+
+  notification-service-5:
     build:
       context: .
       dockerfile: ./notification-service/Dockerfile

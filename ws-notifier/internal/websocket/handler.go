@@ -48,46 +48,46 @@ func (h *Handler) WebSocket(c *gin.Context) {
 
 	h.wsManager.Register(userID, conn)
 
-	if err = h.wsManager.SendToUser(userID, []byte(`{"type":"connected"}`)); err != nil {
-		observability.Error(c.Request.Context(), "Failed to send connected message",
+	wsCtx := c.Request.Context()
+
+	if err = h.wsManager.SendToUser(wsCtx, userID, []byte(`{"type":"connected"}`)); err != nil {
+		observability.Error(wsCtx, "Failed to send connected message",
 			"user_id", userID,
 			"error", err,
 		)
 	}
 
-	ctx := c.Request.Context()
-
 	// Догружаем unread
-	unread, err := h.redisClient.GetUnread(ctx, userID)
+	unread, err := h.redisClient.GetUnread(wsCtx, userID)
 	if err == nil && len(unread) > 0 {
 		for _, data := range unread {
 			natsMessage := model.NatsMessage{}
 			if err := json.Unmarshal(data, &natsMessage); err != nil {
-				observability.Error(ctx, "Failed to unmarshal message NatsEvent",
+				observability.Error(wsCtx, "Failed to unmarshal message NatsEvent",
 					"user_id", userID,
 					"error", err,
 				)
 			}
 			eventID := natsMessage.EventID
 
-			if sendErr := h.wsManager.SendToUser(userID, data); sendErr == nil {
+			if sendErr := h.wsManager.SendToUser(wsCtx, userID, data); sendErr == nil {
 				// Успешно отправили
-				if markErr := h.repo.MarkAsDelivered(ctx, eventID); markErr != nil {
-					observability.Error(ctx, "failed to mark delivered notification",
+				if markErr := h.repo.MarkAsDelivered(wsCtx, eventID); markErr != nil {
+					observability.Error(wsCtx, "failed to mark delivered notification",
 						"event_id", eventID,
 						"user_id", userID,
 						"error", markErr,
 					)
 				}
-				observability.Info(ctx, "Notification sent from Redis cache",
+				observability.Info(wsCtx, "Notification sent from Redis cache",
 					"event_id", eventID,
 					"user_id", userID,
 				)
 				observability.NotificationsDeliveredTotal.WithLabelValues("delivered").Inc()
 			} else {
 				// Не удалось отправить
-				if markErr := h.repo.MarkAsFailed(ctx, eventID); markErr != nil {
-					observability.Error(ctx, "Failed to mark notification as failed",
+				if markErr := h.repo.MarkAsFailed(wsCtx, eventID); markErr != nil {
+					observability.Error(wsCtx, "Failed to mark notification as failed",
 						"event_id", eventID,
 						"user_id", userID,
 						"error", markErr,

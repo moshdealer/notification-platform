@@ -45,6 +45,7 @@ type NATSCfg struct {
 	NATSAddr    string `mapstructure:"addr"`
 	SubjectNew  string `mapstructure:"subject_new"`
 	SubjectRead string `mapstructure:"subject_read"`
+	NodeName    string `mapstructure:"node_name"`
 }
 
 type LogCfg struct {

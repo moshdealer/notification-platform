@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -25,9 +24,7 @@ WS-Notifier - сервис для обработки WebSocket соединен�
 */
 
 //TODO
-// Контексты и graceful shutdown
-// - Prometheus metrics попробовать накинуть
-// - Логирование
+// - Оптимизировать работу с большой нагрузкой (вероятно проблема в подходах работы с redis)
 // - Докер оптимизировать
 
 type App struct {
@@ -42,7 +39,7 @@ func main() {
 	// 1. Загружаем конфиг
 	cfg, err := config.LoadWSNotifier()
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "config load error: %v\n", err)
+		observability.Error(context.Background(), "config load error", "error", err)
 		os.Exit(1)
 	}
 
@@ -51,12 +48,18 @@ func main() {
 	}
 
 	observability.Init(cfg.LogsCfg)
+
+	appCtx := observability.WithLogger(context.Background(), observability.FromContext(context.Background()))
+
 	// TODO Логирую конфиг специально для удобства отладки, для боя убрать
-	observability.Debug(context.Background(), "Config loaded", "config", cfg)
+	observability.Debug(appCtx, "Config loaded", "config", cfg)
+
+	rootCtx, stop := signal.NotifyContext(appCtx, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	dbConn, err := db.Connect(&cfg.Database)
 	if err != nil {
-		observability.Error(context.Background(), "DB connect error", "error", err)
+		observability.Error(rootCtx, "DB connect error", "error", err)
 		os.Exit(1)
 	}
 
@@ -66,20 +69,17 @@ func main() {
 	app.RedisClient = redis.NewClient(&cfg.Redis)
 
 	// 3. WebSocket Manager
-	app.WSManager = websocket.NewManager()
+	app.WSManager = websocket.NewManagerWithContext(rootCtx)
 
 	// 4. NATS Subscriber (слушает уведомления и раздаёт по WS)
-	app.NATSSubscriber, err = nats.NewSubscriber(&app.Config.NATS, app.WSManager, app.RedisClient, app.OutBoxRepo)
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	app.NATSSubscriber, err = nats.NewSubscriber(&app.Config.NATS, app.WSManager, app.RedisClient, app.OutBoxRepo, rootCtx)
 
 	// Запускаем NATS subscriber
 	if err := app.NATSSubscriber.Start(); err != nil {
-		observability.Error(context.Background(), "NATS Subscriber start error", "error", err)
+		observability.Error(rootCtx, "NATS Subscriber start error", "error", err)
 		os.Exit(1)
 	}
-	observability.Info(context.Background(), "NATS WebSocket Subscriber запущен")
+	observability.Info(rootCtx, "NATS WebSocket Subscriber запущен")
 
 	// 5. HTTP сервер (только WebSocket)
 
@@ -96,15 +96,15 @@ func main() {
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			observability.Error(context.Background(), "Server error", "error", err)
+			observability.Error(rootCtx, "Server error", "error", err)
 		}
 	}()
-	observability.Info(context.Background(), "WS-Notifier started on http://localhost",
+	observability.Info(rootCtx, "WS-Notifier started on http://localhost",
 		"port", app.Config.Server.Port)
-	observability.Info(context.Background(), "WebSocket endpoint: ws://localhost",
+	observability.Info(rootCtx, "WebSocket endpoint: ws://localhost",
 		"port", app.Config.Server.Port)
 
-	<-ctx.Done()
+	<-rootCtx.Done()
 	observability.Info(context.Background(), "Shutting down WS-Notifier")
 
 	// Graceful shutdown
@@ -112,7 +112,7 @@ func main() {
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		observability.Error(context.Background(), "Server shutdown error", "error", err)
+		observability.Error(shutdownCtx, "Server shutdown error", "error", err)
 	}
 
 	if app.NATSSubscriber != nil {
@@ -127,5 +127,5 @@ func main() {
 		app.WSManager.CloseAll()
 	}
 
-	observability.Info(context.Background(), "WS-Notifier stopped gracefully")
+	observability.Info(shutdownCtx, "WS-Notifier stopped gracefully")
 }
