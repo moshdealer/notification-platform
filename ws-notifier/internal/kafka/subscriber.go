@@ -1,4 +1,4 @@
-package nats
+package kafka
 
 import (
 	"context"
@@ -12,26 +12,22 @@ import (
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/redis"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/repository"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/websocket"
-	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 type Subscriber struct {
-	nc          *nats.Conn
-	js          jetstream.JetStream
-	consumer    jetstream.Consumer
-	cons        jetstream.ConsumeContext
+	client      *kgo.Client
 	wsManager   *websocket.Manager
 	redisClient *redis.Client
 	repo        repository.OutBoxRepository
-	streamName  string
-	nodeName    string
+	topic       string
+	group       string
 	rootCtx     context.Context
 	cancel      context.CancelFunc
 }
 
 func NewSubscriber(
-	cfg *config.NATSCfg,
+	cfg *config.KafkaCfg,
 	wm *websocket.Manager,
 	rc *redis.Client,
 	repo repository.OutBoxRepository,
@@ -43,30 +39,29 @@ func NewSubscriber(
 
 	ctx, cancel := context.WithCancel(rootCtx)
 
-	nc, err := nats.Connect(cfg.NATSAddr,
-		nats.Name("ws-notifier-subscriber"),
-		nats.MaxReconnects(-1),
-	)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("NATS connect error: %w", err)
+	opts := []kgo.Opt{
+		kgo.SeedBrokers(cfg.Brokers...),
+		kgo.ConsumerGroup(cfg.ConsumerGroup),
+		kgo.ConsumeTopics(cfg.Topic),
+		kgo.FetchMaxWait(500 * time.Millisecond),
+		kgo.DisableAutoCommit(), // будем коммитить вручную после обработки
+		kgo.SessionTimeout(30 * time.Second),
+		kgo.HeartbeatInterval(3 * time.Second),
 	}
 
-	js, err := jetstream.New(nc)
+	client, err := kgo.NewClient(opts...)
 	if err != nil {
 		cancel()
-		nc.Close()
-		return nil, fmt.Errorf("JetStream init error: %w", err)
+		return nil, fmt.Errorf("failed to create kafka consumer: %w", err)
 	}
 
 	return &Subscriber{
-		nc:          nc,
-		js:          js,
+		client:      client,
 		wsManager:   wm,
 		redisClient: rc,
 		repo:        repo,
-		streamName:  cfg.SubjectNew,
-		nodeName:    cfg.NodeName,
+		topic:       cfg.Topic,
+		group:       cfg.ConsumerGroup,
 		rootCtx:     ctx,
 		cancel:      cancel,
 	}, nil
@@ -74,83 +69,77 @@ func NewSubscriber(
 
 func (s *Subscriber) Start() error {
 	logger := observability.FromContext(s.rootCtx)
-	logger.Info("NATS JetStream Pull Subscriber starting", "stream", s.streamName)
+	logger.Info("Kafka Subscriber starting", "topic", s.topic, "group", s.group)
 
-	// Pull Consumer
-	consumer, err := s.js.CreateOrUpdateConsumer(s.rootCtx, s.streamName, jetstream.ConsumerConfig{
-		Name:          "notification-service-ws-pull",
-		Durable:       "notification-service-ws-pull",
-		AckPolicy:     jetstream.AckExplicitPolicy,
-		MaxDeliver:    10,
-		AckWait:       180 * time.Second,
-		MaxAckPending: 50000,
-		FilterSubject: s.streamName + ".>",
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create pull consumer: %w", err)
-	}
-	s.consumer = consumer
-
-	// Запускаем слушателя Redis broadcast
 	s.startRedisBroadcastListener()
 
-	// Обработка сообщений в цикле
-	go s.runPullLoop()
+	go func() {
+		for {
+			select {
+			case <-s.rootCtx.Done():
+				return
+			default:
+				fetches := s.client.PollFetches(s.rootCtx)
+				if fetches.IsClientClosed() {
+					return
+				}
 
-	logger.Info("NATS JetStream Pull Subscriber started")
+				// Обрабатываем записи батчами по 500
+				records := fetches.Records()
+
+				for i := 0; i < len(records); i += 500 {
+					end := i + 500
+					if end > len(records) {
+						end = len(records)
+					}
+
+					batch := records[i:end]
+
+					for _, record := range batch {
+						s.processRecord(record)
+					}
+				}
+			}
+		}
+	}()
+
 	return nil
 }
 
-func (s *Subscriber) runPullLoop() {
-	logger := observability.FromContext(s.rootCtx)
-
-	for {
-		select {
-		case <-s.rootCtx.Done():
-			return
-		default:
-		}
-
-		// Работаем с батчами по 500
-		msgs, err := s.consumer.Fetch(500, jetstream.FetchMaxWait(500*time.Millisecond))
-		if err != nil {
-			if err != jetstream.ErrNoMessages {
-				logger.Warn("Fetch error", "error", err)
-			}
-			continue
-		}
-
-		for msg := range msgs.Messages() {
-			s.processMessage(msg)
-		}
-	}
-}
-
-func (s *Subscriber) processMessage(msg jetstream.Msg) {
+// processRecord
+func (s *Subscriber) processRecord(record *kgo.Record) {
 	msgCtx, cancel := context.WithTimeout(s.rootCtx, 10*time.Second)
 	defer cancel()
 
 	logger := observability.FromContext(msgCtx)
 
 	var natsMessage model.NatsMessage
-	if err := json.Unmarshal(msg.Data(), &natsMessage); err != nil {
-		logger.Error("Failed to unmarshal message", "error", err)
-		msg.Nak()
+	if err := json.Unmarshal(record.Value, &natsMessage); err != nil {
+		logger.Error("Failed to unmarshal kafka message", "error", err)
 		return
 	}
 
-	if err := msg.Ack(); err != nil {
-		logger.Error("Failed to Ack message", "error", err)
+	s.client.MarkCommitRecords(record) // Коммитим запись после успешного unmarshal
+
+	priority := natsMessage.Payload.Priority
+	if priority == "" {
+		priority = "medium"
+	}
+
+	observability.BrokerConsumeReceivedTotal.WithLabelValues("kafka", priority).Inc()
+
+	if !record.Timestamp.IsZero() {
+		latency := time.Since(record.Timestamp).Seconds()
+		observability.BrokerConsumeLatencySeconds.WithLabelValues("kafka", priority).Observe(latency)
 	}
 
 	userID := natsMessage.Payload.UserID
-	priority := natsMessage.Payload.Priority
 	eventID := natsMessage.EventID
 
 	sentLocally := false
 
 	if s.wsManager.HasActiveConnections(userID) {
-		if sendErr := s.wsManager.SendToUser(msgCtx, userID, msg.Data()); sendErr == nil {
+		if sendErr := s.wsManager.SendToUser(msgCtx, userID, record.Value); sendErr == nil {
 			if err := s.repo.MarkAsDelivered(msgCtx, eventID); err != nil {
 				logger.Warn("Failed to mark as delivered", "error", err, "event_id", eventID)
 			}
@@ -160,11 +149,8 @@ func (s *Subscriber) processMessage(msg jetstream.Msg) {
 	}
 
 	if !sentLocally {
-		if addErr := s.redisClient.AddUnread(msgCtx, userID, msg.Data()); addErr != nil {
+		if addErr := s.redisClient.AddUnread(msgCtx, userID, record.Value); addErr != nil {
 			logger.Error("Failed to save to Redis", "error", addErr, "user_id", userID)
-			if err := s.repo.MarkAsFailed(msgCtx, eventID); err != nil {
-				logger.Error("Failed to mark as failed", "error", err, "event_id", eventID)
-			}
 			return
 		}
 
@@ -177,10 +163,16 @@ func (s *Subscriber) processMessage(msg jetstream.Msg) {
 			logger.Error("Failed to mark as waiting", "error", err, "event_id", eventID)
 		}
 
-		if err := s.redisClient.PublishBroadcast(msgCtx, s.redisClient.BroadcastChannel, msg.Data()); err != nil {
+		if err := s.redisClient.PublishBroadcast(msgCtx, s.redisClient.BroadcastChannel, record.Value); err != nil {
 			logger.Error("Failed to publish to broadcast", "error", err)
 		}
 	}
+
+	logger.Info("Kafka message processed",
+		"user_id", userID,
+		"event_id", eventID,
+		"priority", priority,
+	)
 }
 
 func (s *Subscriber) startRedisBroadcastListener() {
@@ -212,17 +204,15 @@ func (s *Subscriber) startRedisBroadcastListener() {
 	})
 }
 
+// Close останавливает подписку и закрывает соединение с Kafka
 func (s *Subscriber) Close() {
 	if s.cancel != nil {
 		s.cancel()
 	}
 
-	if s.cons != nil {
-		s.cons.Stop()
-		s.cons = nil
+	if s.client != nil {
+		s.client.Close()
 	}
-	if s.nc != nil {
-		s.nc.Close()
-	}
-	observability.Info(s.rootCtx, "NATS JetStream Subscriber closed")
+
+	observability.Info(context.Background(), "Kafka Subscriber closed")
 }

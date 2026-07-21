@@ -16,9 +16,15 @@ redis:
   unread_key_prefix: "user:%s:unread"
   broadcast_channel: "notifications:broadcast"
 
+logs:
+  logs_level: "debug"
+
+broker_type: "kafka"
 nats:
   subject_new: "notifications_new"
   subject_read: "notifications.read"
-
-logs:
-  logs_level: "debug"
+kafka:
+  brokers:
+    - "kafka:9092"
+  topic: "notifications"
+  consumer_group: "ws-notifier"

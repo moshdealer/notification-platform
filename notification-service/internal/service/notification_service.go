@@ -4,9 +4,9 @@ package service
 import (
 	"context"
 	"fmt"
+	"github.com/moshdealer/notification-platform/pkg/messaging"
 	"time"
 
-	"github.com/moshdealer/notification-platform/notification-service/internal/nats"
 	"github.com/moshdealer/notification-platform/notification-service/internal/repository"
 	"github.com/moshdealer/notification-platform/pkg/model"
 	"github.com/moshdealer/notification-platform/pkg/observability"
@@ -15,13 +15,13 @@ import (
 // NotificationService - бизнес-логика уведомлений
 type NotificationService struct {
 	repo      repository.NotificationRepository
-	publisher *nats.Publisher
+	publisher messaging.Publisher
 }
 
 // NewNotificationService - конструктор (Dependency Injection)
 func NewNotificationService(
 	repo repository.NotificationRepository,
-	publisher *nats.Publisher,
+	publisher messaging.Publisher,
 ) *NotificationService {
 	return &NotificationService{
 		repo:      repo,
@@ -156,6 +156,7 @@ func (s *NotificationService) runOutboxWorker(ctx context.Context, workerID int)
 					"event_id", event.ID,
 					"error", err,
 				)
+				s.repo.MarkAsPending(context.Background(), event.ID)
 				cancel()
 				continue
 			}

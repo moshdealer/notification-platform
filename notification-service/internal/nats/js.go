@@ -16,14 +16,15 @@ func CreateNotificationsStream(js jetstream.JetStream, cfg config.NATSCfg) error
 		Name:     cfg.SubjectNew,
 		Subjects: []string{fmt.Sprintf("%v.>", cfg.SubjectNew)},
 
-		Retention:  jetstream.LimitsPolicy, // сообщения удаляются после Ack
-		Duplicates: 5 * time.Minute,
-		// Если хотим работать с WorkQueuePolicy:
-		MaxAge:   7 * 24 * time.Hour, // максимальное время жизни
-		MaxMsgs:  -1,                 // без лимита по количеству
-		MaxBytes: 200 * 1024 * 1024,  // 1 мб
+		Retention: jetstream.WorkQueuePolicy,
+		Discard:   jetstream.DiscardOld,
 
-		Storage: jetstream.FileStorage,
+		Duplicates: 10 * time.Second,
+		// Оставим лимиты на всякий случай
+		MaxAge:   1 * 24 * time.Hour,     // максимальное время жизни
+		MaxMsgs:  -1,                     // без лимита по количеству
+		MaxBytes: 2 * 1024 * 1024 * 1024, // 2 ГБ,  // 1 мб
+		Storage:  jetstream.FileStorage,
 		// Replicas: 3,
 
 	})

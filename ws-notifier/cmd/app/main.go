@@ -10,7 +10,9 @@ import (
 
 	"github.com/moshdealer/notification-platform/pkg/config"
 	"github.com/moshdealer/notification-platform/pkg/database/db"
+	"github.com/moshdealer/notification-platform/pkg/messaging"
 	"github.com/moshdealer/notification-platform/pkg/observability"
+	"github.com/moshdealer/notification-platform/ws-notifier/internal/kafka"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/nats"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/redis"
 	"github.com/moshdealer/notification-platform/ws-notifier/internal/repository"
@@ -24,13 +26,15 @@ WS-Notifier - сервис для обработки WebSocket соединен�
 */
 
 //TODO
-// - Оптимизировать работу с большой нагрузкой (вероятно проблема в подходах работы с redis)
+// - Вынести рассылку в горутины (в целом оптимизировать процесс)
+// - Добавить идемпотентность в брокеры
 // - Докер оптимизировать
 
 type App struct {
 	Config         *config.ConfigWSNotifier
 	RedisClient    *redis.Client
 	WSManager      *websocket.Manager
+	Subscriber     messaging.Subscriber
 	NATSSubscriber *nats.Subscriber
 	OutBoxRepo     repository.OutBoxRepository
 }
@@ -71,21 +75,38 @@ func main() {
 	// 3. WebSocket Manager
 	app.WSManager = websocket.NewManagerWithContext(rootCtx)
 
-	// 4. NATS Subscriber (слушает уведомления и раздаёт по WS)
-	app.NATSSubscriber, err = nats.NewSubscriber(&app.Config.NATS, app.WSManager, app.RedisClient, app.OutBoxRepo, rootCtx)
+	// 4. Message Brokers (слушает уведомления и раздаёт по WS)
+	var subscriber messaging.Subscriber
 
-	// Запускаем NATS subscriber
-	if err := app.NATSSubscriber.Start(); err != nil {
-		observability.Error(rootCtx, "NATS Subscriber start error", "error", err)
+	switch cfg.BrokerType {
+	case "kafka":
+		kafkaSub, err := kafka.NewSubscriber(&cfg.Kafka, app.WSManager, app.RedisClient, app.OutBoxRepo, rootCtx)
+		if err != nil {
+			observability.Error(rootCtx, "Kafka Subscriber create error", "error", err)
+			os.Exit(1)
+		}
+		subscriber = kafkaSub
+
+	default:
+		natsSub, err := nats.NewSubscriber(&cfg.NATS, app.WSManager, app.RedisClient, app.OutBoxRepo, rootCtx)
+		if err != nil {
+			observability.Error(rootCtx, "NATS Subscriber create error", "error", err)
+			os.Exit(1)
+		}
+		subscriber = natsSub
+	}
+	app.Subscriber = subscriber
+
+	// Запускаем subscriber
+	if err := app.Subscriber.Start(); err != nil {
+		observability.Error(rootCtx, "Subscriber start error", "error", err)
 		os.Exit(1)
 	}
-	observability.Info(rootCtx, "NATS WebSocket Subscriber запущен")
+	defer subscriber.Close()
 
 	// 5. HTTP сервер (только WebSocket)
-
 	wsHandler := websocket.NewHandler(app.WSManager, app.RedisClient, app.OutBoxRepo)
 
-	// Используем router из ws-notifier
 	r := router.New(wsHandler)
 	engine := r.Setup()
 
@@ -115,8 +136,8 @@ func main() {
 		observability.Error(shutdownCtx, "Server shutdown error", "error", err)
 	}
 
-	if app.NATSSubscriber != nil {
-		app.NATSSubscriber.Close()
+	if app.Subscriber != nil {
+		app.Subscriber.Close()
 	}
 
 	if app.RedisClient != nil {

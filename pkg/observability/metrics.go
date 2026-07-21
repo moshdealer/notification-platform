@@ -10,6 +10,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+// TODO навести порядок с метриками в целом (решить с нодами проблему)
+
 // HTTP метрики
 var (
 	HTTPRequestsTotal = promauto.NewCounterVec(
@@ -97,6 +99,38 @@ var (
 			Help: "Total number of notifications delivered to clients",
 		},
 		[]string{"status"},
+	)
+)
+
+// ==================== BROKER METRICS (для сравнения NATS vs Kafka) ====================
+
+var (
+	// Счётчик полученных сообщений (сразу после получения из брокера)
+	BrokerConsumeReceivedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "broker_consume_received_total",
+			Help: "Total messages received from broker right after consume",
+		},
+		[]string{"broker", "priority"},
+	)
+
+	// Latency от публикации до получения в ws-notifier (самая важная метрика для сравнения)
+	BrokerConsumeLatencySeconds = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "broker_consume_latency_seconds",
+			Help:    "Duration from message produce time to receive in ws-notifier",
+			Buckets: prometheus.ExponentialBuckets(0.001, 2, 12), // от 1мс
+		},
+		[]string{"broker", "priority"},
+	)
+
+	BrokerPublishDurationSeconds = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "broker_publish_duration_seconds",
+			Help:    "Duration of publish call to broker",
+			Buckets: prometheus.ExponentialBuckets(0.001, 2, 12),
+		},
+		[]string{"broker", "worker_id"},
 	)
 )
 

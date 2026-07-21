@@ -8,9 +8,14 @@ database:
   max_idle_conns: 10
   conn_max_lifetime: 1h
 
+logs:
+  logs_level: "debug"
+
+broker_type: "kafka"
 nats:
   subject_new: "notifications_new"
   subject_read: "notifications.read"
-
-logs:
-  logs_level: "debug"
+kafka:
+  brokers:
+    - "kafka:9092"
+  topic: "notifications"
