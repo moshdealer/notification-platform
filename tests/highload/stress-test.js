@@ -1,68 +1,136 @@
 import http from 'k6/http';
 import ws from 'k6/ws';
-import { Trend, Counter, Rate } from 'k6/metrics';
+import exec from 'k6/execution';
 import { check, sleep } from 'k6';
+import { Counter, Rate, Trend } from 'k6/metrics';
 
-// ==================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ДЛЯ ДУБЛИКАТОВ ====================
-const duplicatesByUser = {};
+const PROFILE = {
+    startRps: 250,
+    targetRps: 2000,
+    rampUpSeconds: 60,
+    holdSeconds: 120,
+    rampDownSeconds: 30,
+    httpP95: 800,
+    deliveryP95: 3000,
+};
 
-// ==================== НАСТРОЙКИ ====================
 const NUM_USERS = 1500;
-const WS_VUS    = 1550;
+const WS_VUS = NUM_USERS;
 
-const TARGET_RPS = 400;
-const RAMP_UP_TIME = '1m';
-const HOLD_TIME = '2m';
-const RAMP_DOWN_TIME = '30s';
+const SEND_START_SECONDS = 20;
+const DELIVERY_DRAIN_SECONDS = 30;
+const MIN_SUCCESS_RATIO = 0.99;
+const MAX_RECONNECT_ATTEMPTS = 4;
 
 const WS_URL = 'ws://localhost:8080/ws';
 const HTTP_URL = 'http://localhost:8080/notifications';
 
-// ==================== МЕТРИКИ ====================
+const TEST_RUN_ID = __ENV.TEST_RUN_ID;
+
+if (!TEST_RUN_ID) {
+    throw new Error(
+        'TEST_RUN_ID is required, for example: TEST_RUN_ID=stress-001',
+    );
+}
+
+const EXPECTED_NOTIFICATIONS = Math.round(
+    ((PROFILE.startRps + PROFILE.targetRps / 2) / 2)
+        * PROFILE.rampUpSeconds
+    + ((PROFILE.targetRps / 2 + PROFILE.targetRps) / 2)
+        * PROFILE.rampUpSeconds
+    + PROFILE.targetRps * PROFILE.holdSeconds
+    + (PROFILE.targetRps / 2) * PROFILE.rampDownSeconds,
+);
+
+const MIN_REQUIRED_NOTIFICATIONS = Math.floor(
+    EXPECTED_NOTIFICATIONS * MIN_SUCCESS_RATIO,
+);
+
+const SEND_DURATION_SECONDS =
+    PROFILE.rampUpSeconds * 2
+    + PROFILE.holdSeconds
+    + PROFILE.rampDownSeconds;
+
+const WS_DURATION_SECONDS =
+    SEND_START_SECONDS
+    + SEND_DURATION_SECONDS
+    + DELIVERY_DRAIN_SECONDS;
+
 const deliveryLatency = new Trend('delivery_latency_ms', true);
+const notificationsCreated = new Counter('notifications_created');
 const messagesReceived = new Counter('messages_received');
-const messagesSent = new Counter('messages_sent');
+const uniqueMessagesReceived = new Counter('unique_messages_received');
+const duplicateMessages = new Counter('duplicate_messages');
+const outOfOrderMessages = new Counter('out_of_order_messages');
+const outOfOrderRate = new Rate('out_of_order_rate');
+const invalidWsMessages = new Counter('invalid_ws_messages');
+const foreignRunMessages = new Counter('foreign_run_messages');
 const httpSuccessRate = new Rate('http_success');
 const wsReconnects = new Counter('ws_reconnects');
 const wsConnectionFailures = new Counter('ws_connection_failures');
+
+const THRESHOLDS = {
+    'http_req_duration{scenario:send_load}': [
+        `p(95)<${PROFILE.httpP95}`,
+    ],
+    delivery_latency_ms: [
+        `p(95)<${PROFILE.deliveryP95}`,
+    ],
+    http_success: ['rate>0.99'],
+    notifications_created: [
+        `count>=${MIN_REQUIRED_NOTIFICATIONS}`,
+    ],
+    unique_messages_received: [
+        `count>=${MIN_REQUIRED_NOTIFICATIONS}`,
+    ],
+    duplicate_messages: ['count==0'],
+    invalid_ws_messages: ['count==0'],
+    ws_connection_failures: ['count==0'],
+};
 
 export const options = {
     scenarios: {
         ws_listeners: {
             executor: 'constant-vus',
             vus: WS_VUS,
-            duration: '5m',
+            duration: `${WS_DURATION_SECONDS}s`,
             exec: 'listenWS',
             gracefulStop: '30s',
         },
         send_load: {
             executor: 'ramping-arrival-rate',
-            startRate: 100,
+            startRate: PROFILE.startRps,
             timeUnit: '1s',
-            preAllocatedVUs: 50,
-            maxVUs: 800,
-            startTime: '20s',
+            preAllocatedVUs: 500,
+            maxVUs: 1200,
+            startTime: `${SEND_START_SECONDS}s`,
             stages: [
-                { duration: RAMP_UP_TIME, target: TARGET_RPS / 2 },
-                { duration: RAMP_UP_TIME, target: TARGET_RPS },
-                { duration: HOLD_TIME, target: TARGET_RPS },
-                { duration: RAMP_DOWN_TIME, target: 0 },
+                {
+                    duration: `${PROFILE.rampUpSeconds}s`,
+                    target: PROFILE.targetRps / 2,
+                },
+                {
+                    duration: `${PROFILE.rampUpSeconds}s`,
+                    target: PROFILE.targetRps,
+                },
+                {
+                    duration: `${PROFILE.holdSeconds}s`,
+                    target: PROFILE.targetRps,
+                },
+                {
+                    duration: `${PROFILE.rampDownSeconds}s`,
+                    target: 0,
+                },
             ],
             exec: 'sendNotifications',
             gracefulStop: '30s',
         },
     },
-    thresholds: {
-        http_req_duration: ['p(95)<800'],
-        delivery_latency_ms: ['p(95)<3000'],
-        http_success: ['rate>0.90'],
-        messages_received: ['count>90000'],
-    },
+    thresholds: THRESHOLDS,
 };
 
-// ==================== ОТПРАВКА ====================
 export function sendNotifications() {
-    const userIndex = Math.floor(Math.random() * (NUM_USERS+1));
+    const userIndex = Math.floor(Math.random() * NUM_USERS);
     const userId = `load-user-${userIndex}`;
     const createdAt = Date.now();
 
@@ -73,138 +141,178 @@ export function sendNotifications() {
         type: 'message',
         priority: 'medium',
         data: {
+            test_run_id: TEST_RUN_ID,
             created_at: createdAt,
-            seq: __ITER,
         },
     });
 
-    const res = http.post(HTTP_URL, payload, {
+    const response = http.post(HTTP_URL, payload, {
         headers: { 'Content-Type': 'application/json' },
     });
 
-    messagesSent.add(1);
-    httpSuccessRate.add(res.status === 201 || res.status === 200);
+    const created = response.status === 201 || response.status === 200;
 
-    check(res, {
-        'notification created': (r) => r.status === 201 || r.status === 200,
+    httpSuccessRate.add(created);
+
+    if (created) {
+        notificationsCreated.add(1);
+    }
+
+    check(response, {
+        'notification created': () => created,
     });
 }
 
-// ==================== WEBSOCKET СЛУШАТЕЛИ ====================
 export function listenWS() {
-    const userId = `load-user-${__VU - 1}`;
-    const url = `${WS_URL}?user_id=${userId}&token=testtoken`;
+    const userIndex = exec.scenario.iterationInTest % NUM_USERS;
+    const userId = `load-user-${userIndex}`;
+    const url = `${WS_URL}?user_id=${encodeURIComponent(userId)}&token=testtoken`;
 
-    let attempt = 0;
-    const maxAttempts = 4;
+    const receivedEventIDs = new Set();
 
-    // Инициализируем статистику по пользователю
-    if (!duplicatesByUser[userId]) {
-        duplicatesByUser[userId] = {
-            received: new Set(),
-            duplicatesCount: 0,
-        };
-    }
-
-    const userStats = duplicatesByUser[userId];
+    let lastEventID = 0;
+    let reconnectAttempts = 0;
+    let reconnectScheduled = false;
+    let connectionFailureReported = false;
+    let hasConnected = false;
+    let stopping = false;
+    let activeSocket = null;
 
     sleep(Math.random() * 12);
 
-    function tryConnect() {
-        attempt++;
+    const stopDelay =
+        WS_DURATION_SECONDS * 1000
+        - exec.instance.currentTestRunDuration
+        - 250;
 
-        ws.connect(url, {}, function (socket) {
-            socket.on('open', () => {
-                if (attempt > 1) wsReconnects.add(1);
-                attempt = 0;
-            });
-
-            socket.on('message', (rawData) => {
-                let msg;
-                try {
-                    msg = JSON.parse(rawData);
-                } catch (e) {
-                    return;
-                }
-
-                if (msg.type === 'connected') return;
-
-                messagesReceived.add(1);
-
-                const createdAt = msg.data?.created_at || msg.created_at;
-                if (createdAt) {
-                    deliveryLatency.add(Date.now() - createdAt);
-                }
-
-                // === Отслеживание дублей ===
-                if (msg.data?.seq !== undefined) {
-                    const seq = msg.data.seq;
-
-                    if (userStats.received.has(seq)) {
-                        userStats.duplicatesCount++;
-                    } else {
-                        userStats.received.add(seq);
-                    }
-                }
-            });
-
-            socket.on('close', () => {
-                if (attempt < maxAttempts) {
-                    setTimeout(tryConnect, 800 * attempt);
-                } else {
-                    wsConnectionFailures.add(1);
-                }
-            });
-
-            socket.on('error', (e) => {
-                if (attempt < maxAttempts) {
-                    setTimeout(tryConnect, 800 * attempt);
-                } else {
-                    wsConnectionFailures.add(1);
-                }
-            });
-
-            socket.setTimeout(() => socket.close(), 1000 * 60 * 30);
-        });
+    if (stopDelay <= 0) {
+        return;
     }
 
-    tryConnect();
-}
+    setTimeout(() => {
+        stopping = true;
 
-// ==================== ОТЧЁТ ПО ДУБЛИКАТАМ ====================
-export function teardown() {
-    console.log('\n========== DUPLICATES REPORT ==========');
+        if (activeSocket) {
+            activeSocket.close();
+        }
+    }, stopDelay);
 
-    let totalDuplicates = 0;
-    let usersWithDuplicates = 0;
-    const usersWithDupsList = [];
+    function handleMessage(rawData) {
+        let message;
 
-    for (const [userId, stats] of Object.entries(duplicatesByUser)) {
-        if (stats.duplicatesCount > 0) {
-            usersWithDuplicates++;
-            totalDuplicates += stats.duplicatesCount;
+        try {
+            message = JSON.parse(rawData);
+        } catch {
+            invalidWsMessages.add(1);
+            return;
+        }
 
-            usersWithDupsList.push({
-                userId,
-                duplicates: stats.duplicatesCount,
-            });
+        if (message.type === 'connected') {
+            return;
+        }
+
+        const eventID = message.event_id;
+        const messageData = message.payload?.data;
+
+        if (messageData?.test_run_id !== TEST_RUN_ID) {
+            foreignRunMessages.add(1);
+            return;
+        }
+
+        if (!Number.isInteger(eventID) || !messageData) {
+            invalidWsMessages.add(1);
+            return;
+        }
+
+        invalidWsMessages.add(0);
+        messagesReceived.add(1);
+
+        const duplicate = receivedEventIDs.has(eventID);
+        duplicateMessages.add(duplicate ? 1 : 0);
+
+        if (duplicate) {
+            return;
+        }
+
+        receivedEventIDs.add(eventID);
+        uniqueMessagesReceived.add(1);
+
+        const outOfOrder = lastEventID !== 0 && eventID < lastEventID;
+        outOfOrderMessages.add(outOfOrder ? 1 : 0);
+        outOfOrderRate.add(outOfOrder);
+
+        if (eventID > lastEventID) {
+            lastEventID = eventID;
+        }
+
+        const createdAt = messageData.created_at;
+        if (Number.isFinite(createdAt)) {
+            deliveryLatency.add(Date.now() - createdAt);
         }
     }
 
-    console.log(`Total users with duplicates : ${usersWithDuplicates}`);
-    console.log(`Total duplicate deliveries  : ${totalDuplicates}`);
+    function scheduleReconnect() {
+        if (stopping || reconnectScheduled || connectionFailureReported) {
+            return;
+        }
 
-    if (usersWithDupsList.length > 0) {
-        console.log('\nTop users with duplicates:');
-        usersWithDupsList
-            .sort((a, b) => b.duplicates - a.duplicates)
-            .slice(0, 15)
-            .forEach((u, i) => {
-                console.log(`${i + 1}. ${u.userId} - ${u.duplicates} duplicates`);
-            });
-    } else {
-        console.log('\nNo duplicates were detected during the test!');
+        if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+            connectionFailureReported = true;
+            wsConnectionFailures.add(1);
+            return;
+        }
+
+        const delay = 800 * (reconnectAttempts + 1);
+        const reconnectDeadline =
+            exec.instance.currentTestRunDuration + delay;
+
+        if (reconnectDeadline >= WS_DURATION_SECONDS * 1000) {
+            return;
+        }
+
+        reconnectAttempts++;
+        reconnectScheduled = true;
+
+        setTimeout(() => {
+            reconnectScheduled = false;
+            connect();
+        }, delay);
     }
 
-    console.log('=======================================\n');
+    function connect() {
+        const response = ws.connect(url, {}, (socket) => {
+            activeSocket = socket;
+
+            socket.on('open', () => {
+                if (hasConnected) {
+                    wsReconnects.add(1);
+                }
+
+                hasConnected = true;
+                reconnectAttempts = 0;
+                connectionFailureReported = false;
+                wsConnectionFailures.add(0);
+            });
+
+            socket.on('message', handleMessage);
+            socket.on('close', () => {
+                if (activeSocket === socket) {
+                    activeSocket = null;
+                }
+
+                scheduleReconnect();
+            });
+
+            socket.on('error', () => {
+                socket.close();
+                scheduleReconnect();
+            });
+        });
+
+        if (!response || response.status !== 101) {
+            scheduleReconnect();
+        }
+    }
+
+    connect();
 }

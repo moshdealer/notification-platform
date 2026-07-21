@@ -4,13 +4,18 @@ server:
   write_timeout: 5s
 
 database:
-  max_open_conns: 20
-  max_idle_conns: 10
-  conn_max_lifetime: 1h
+  max_open_conns: 12
+  max_idle_conns: 4
+  conn_max_lifetime: 30m
 
+logs:
+  logs_level: "warn"
+
+broker_type: "nats"
 nats:
   subject_new: "notifications_new"
   subject_read: "notifications.read"
-
-logs:
-  logs_level: "debug"
+kafka:
+  brokers:
+    - "kafka:9092"
+  topic: "notifications"

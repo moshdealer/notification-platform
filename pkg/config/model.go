@@ -6,16 +6,20 @@ type ConfigNotificationService struct {
 	Server                  ServerCfg   `mapstructure:"server"`
 	Database                DatabaseCfg `mapstructure:"database"`
 	NATS                    NATSCfg     `mapstructure:"nats"`
+	Kafka                   KafkaCfg    `mapstructure:"kafka"`
+	BrokerType              string      `mapstructure:"broker_type"`
 	LogsCfg                 LogCfg      `mapstructure:"logs"`
 	OutboxDispatcherEnabled bool        `mapstructure:"outbox_dispatcher_enabled"`
 }
 
 type ConfigWSNotifier struct {
-	Server   ServerCfg   `mapstructure:"server"`
-	Database DatabaseCfg `mapstructure:"database"`
-	Redis    RedisCfg    `mapstructure:"redis"`
-	NATS     NATSCfg     `mapstructure:"nats"`
-	LogsCfg  LogCfg      `mapstructure:"logs"`
+	Server     ServerCfg   `mapstructure:"server"`
+	Database   DatabaseCfg `mapstructure:"database"`
+	Redis      RedisCfg    `mapstructure:"redis"`
+	NATS       NATSCfg     `mapstructure:"nats"`
+	Kafka      KafkaCfg    `mapstructure:"kafka"`
+	BrokerType string      `mapstructure:"broker_type"`
+	LogsCfg    LogCfg      `mapstructure:"logs"`
 }
 type ServerCfg struct {
 	Port         string        `mapstructure:"port"`
@@ -50,4 +54,10 @@ type NATSCfg struct {
 
 type LogCfg struct {
 	LogLevel string `mapstructure:"logs_level"`
+}
+
+type KafkaCfg struct {
+	Brokers       []string `mapstructure:"brokers"`
+	Topic         string   `mapstructure:"topic"`
+	ConsumerGroup string   `mapstructure:"consumer_group"`
 }

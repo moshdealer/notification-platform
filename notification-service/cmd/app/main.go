@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/moshdealer/notification-platform/notification-service/internal/handler"
+	"github.com/moshdealer/notification-platform/notification-service/internal/kafka"
 	"github.com/moshdealer/notification-platform/notification-service/internal/nats"
 	"github.com/moshdealer/notification-platform/notification-service/internal/repository"
 	"github.com/moshdealer/notification-platform/notification-service/internal/router"
@@ -18,6 +19,7 @@ import (
 	outbox "github.com/moshdealer/notification-platform/notification-service/internal/worker"
 	"github.com/moshdealer/notification-platform/pkg/config"
 	"github.com/moshdealer/notification-platform/pkg/database/db"
+	"github.com/moshdealer/notification-platform/pkg/messaging"
 	"github.com/moshdealer/notification-platform/pkg/observability"
 )
 
@@ -29,13 +31,12 @@ Notification-service - сервис, который принимает по REST
 //TODO
 // - докер оптимизировать
 // - Сделать поддержку смены outbox dispatcher'ов
-// - убрать ненужные комментарии
 
 type App struct {
 	Config              *config.ConfigNotificationService
 	DB                  *gorm.DB
 	NotificationRepo    repository.NotificationRepository
-	NATSPublisher       *nats.Publisher
+	Publisher           messaging.Publisher
 	NotificationService *service.NotificationService
 	OutboxSyncer        *outbox.Syncer
 }
@@ -76,43 +77,66 @@ func main() {
 	// 4. Репозитории
 	app.NotificationRepo = repository.NewNotificationRepository(app.DB)
 
-	// 5. NATS Publisher
-	app.NATSPublisher, err = nats.NewPublisher(&app.Config.NATS)
-	if err != nil {
-		observability.Error(appCtx, "NATS Publisher connect error", "error", err)
-		os.Exit(1)
+	rootCtx, stop := signal.NotifyContext(appCtx, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// 5. Message Brokers
+	if app.Config.OutboxDispatcherEnabled {
+		var publisher messaging.Publisher
+
+		switch cfg.BrokerType {
+		case "kafka":
+			kafkaPub, err := kafka.NewPublisher(&cfg.Kafka)
+			if err != nil {
+				observability.Error(rootCtx, "Kafka Publisher connect error", "error", err)
+				os.Exit(1)
+			}
+			if err := kafka.EnsureTopic(&cfg.Kafka); err != nil {
+				observability.Error(rootCtx, "Failed to create Kafka topic:", "error", err)
+				os.Exit(1)
+			}
+			publisher = kafkaPub
+			defer kafkaPub.Close()
+
+		default:
+			natsPub, err := nats.NewPublisher(&cfg.NATS)
+			if err != nil {
+				observability.Error(rootCtx, "NATS Publisher connect error", "error", err)
+				os.Exit(1)
+			}
+			if err := nats.CreateNotificationsStream(natsPub.GetJetStream(), cfg.NATS); err != nil {
+				observability.Error(rootCtx, "Failed to create JetStream stream:", "error", err)
+				os.Exit(1)
+			}
+			publisher = natsPub
+			defer natsPub.Close()
+		}
+
+		app.Publisher = publisher
+	} else {
+		observability.Info(rootCtx, "[Outbox] Running in API-only mode (background workers disabled)")
 	}
 
-	if err := nats.CreateNotificationsStream(app.NATSPublisher.GetJetStream(), cfg.NATS); err != nil {
-		observability.Error(appCtx, "Failed to create JetStream stream:", "error", err)
-		os.Exit(1)
-	}
+	app.NotificationService = service.NewNotificationService(app.NotificationRepo, app.Publisher)
 
-	// 6. Сервис
-	app.NotificationService = service.NewNotificationService(app.NotificationRepo, app.NATSPublisher)
-
-	// 7. Worker для синхронизации outbox
+	// 6. Worker для синхронизации outbox
 	app.OutboxSyncer = outbox.NewSyncer(
 		app.NotificationRepo,
 		10*time.Second,
 		100,
 	)
 
-	rootCtx, stop := signal.NotifyContext(appCtx, syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	// Запускаем outbox dispatcher (отправка событий в NATS)
+	// 7. Запуск worker
 	if app.Config.OutboxDispatcherEnabled {
+		// Запускаем outbox dispatcher (отправка событий в broker)
 		observability.Info(rootCtx, "[Outbox] Starting background workers",
 			"workers", []string{"OutboxDispatcher", "OutboxSyncer"},
 		)
 		go app.NotificationService.StartOutboxDispatcher(rootCtx, 4)
 		go app.OutboxSyncer.Run(rootCtx)
-	} else {
-		observability.Info(rootCtx, "[Outbox] Running in API-only mode (background workers disabled)")
 	}
 
-	// Запуск HTTP сервер
+	// 7. Запуск HTTP сервер
 	notificationHandler := handler.NewNotificationHandler(app.NotificationService)
 	r := router.New(notificationHandler)
 	engine := r.Setup()
@@ -137,9 +161,9 @@ func main() {
 	// Shutdown
 	observability.Info(appCtx, "Shutting down Notification service...")
 
-	// Закрытие NATS
-	if app.NATSPublisher != nil {
-		app.NATSPublisher.Close()
+	// Закрытие Message broker
+	if app.Publisher != nil {
+		app.Publisher.Close()
 	}
 
 	// Закрытие HTTP

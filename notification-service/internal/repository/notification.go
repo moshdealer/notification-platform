@@ -19,6 +19,7 @@ type NotificationRepository interface {
 	MarkAsExpired(ctx context.Context, id uint) error
 	MarkAsWaiting(ctx context.Context, id uint) error
 	MarkAsFailed(ctx context.Context, id uint) error
+	MarkAsPending(ctx context.Context, id uint) error
 	GetPendingOutboxEvents(ctx context.Context, limit int) ([]model.OutboxEvent, error)
 	ClaimPendingOutboxEvents(ctx context.Context, limit int) ([]model.OutboxEvent, error)
 	MarkOutboxAsSent(ctx context.Context, id uint) error
@@ -204,6 +205,23 @@ func (r *notificationRepo) MarkOutboxAsSent(ctx context.Context, id uint) error 
 
 	if err != nil {
 		return fmt.Errorf("failed to mark outbox event as sent: %w", err)
+	}
+
+	return nil
+}
+
+func (r *notificationRepo) MarkAsPending(ctx context.Context, id uint) error {
+	err := r.db.WithContext(ctx).
+		Model(&model.OutboxEvent{}).
+		Where("id = ?", id).
+		Updates(map[string]any{
+			"status":       model.StatusPending,
+			"updated_at":   time.Now(),
+			"need_to_sync": true,
+		}).Error
+
+	if err != nil {
+		return fmt.Errorf("failed to mark outbox event as pending: %w", err)
 	}
 
 	return nil

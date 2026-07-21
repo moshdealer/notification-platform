@@ -66,74 +66,111 @@ func (m *Manager) Register(userID string, conn *websocket.Conn) *Client {
 	m.clients[userID][client] = true
 	m.mu.Unlock()
 
+	observability.WebSocketConnectionsActive.Inc()
 	go client.writePump(m)
 	go client.readPump(m)
 
 	observability.Info(clientCtx, "User connected", "user_id", userID)
-	observability.WebSocketConnectionsActive.Inc()
 	return client
 }
 
 func (m *Manager) Unregister(userID string, c *Client) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if conns, ok := m.clients[userID]; ok {
-		delete(conns, c)
-		if len(conns) == 0 {
-			delete(m.clients, userID)
-			observability.Info(m.ctx, "User fully disconnected", "user_id", userID)
-		}
-	}
-
 	c.once.Do(func() {
-		close(c.send)
-	})
+		removed := false
+		fullyDisconnected := false
 
-	if c.cancel != nil {
+		m.mu.Lock()
+
+		if conns, ok := m.clients[userID]; ok {
+			if _, exists := conns[c]; exists {
+				delete(conns, c)
+				removed = true
+			}
+
+			if len(conns) == 0 {
+				delete(m.clients, userID)
+				fullyDisconnected = true
+			}
+		}
+
+		m.mu.Unlock()
 		c.cancel()
-	}
 
-	observability.WebSocketConnectionsActive.Dec()
-	c.conn.Close()
+		if err := c.conn.Close(); err != nil {
+			observability.Debug(
+				m.ctx,
+				"WebSocket close error",
+				"user_id", userID,
+				"error", err,
+			)
+		}
+
+		if removed {
+			observability.WebSocketConnectionsActive.Dec()
+		}
+
+		if fullyDisconnected {
+			observability.Info(
+				m.ctx,
+				"User fully disconnected",
+				"user_id", userID,
+			)
+		}
+	})
 }
 
-func (m *Manager) SendToUser(ctx context.Context, userID string, data []byte) error {
+func (m *Manager) SendToUser(
+	ctx context.Context,
+	userID string,
+	data []byte,
+) error {
 	m.mu.RLock()
-	connsMap, ok := m.clients[userID]
-	if !ok || len(connsMap) == 0 {
-		m.mu.RUnlock()
-		return fmt.Errorf("no active connections for user %s", userID)
-	}
+	defer m.mu.RUnlock()
 
-	clients := make([]*Client, 0, len(connsMap))
-	for c := range connsMap {
-		clients = append(clients, c)
+	conns, ok := m.clients[userID]
+	if !ok || len(conns) == 0 {
+		return fmt.Errorf(
+			"no active connections for user %s",
+			userID,
+		)
 	}
-	m.mu.RUnlock()
 
 	allAccepted := true
 
-	for _, client := range clients {
+	for client := range conns {
+		if err := ctx.Err(); err != nil {
+			allAccepted = false
+			break
+		}
+
+		if err := client.ctx.Err(); err != nil {
+			allAccepted = false
+			continue
+		}
+
 		select {
 		case client.send <- data:
-			// успешно поставили в буфер клиента
-		case <-ctx.Done():
-			allAccepted = false
-			observability.Warn(ctx, "SendToUser: context cancelled during send",
-				"user_id", userID)
 		default:
 			allAccepted = false
-			observability.Warn(ctx, "SendToUser: client send buffer full (backpressure). Client will NOT be unregistered.",
-				"user_id", userID)
+
+			observability.Warn(
+				ctx,
+				"WebSocket client send buffer full",
+				"user_id", userID,
+			)
 		}
 	}
 
 	if !allAccepted {
-		return fmt.Errorf("not all clients accepted the message for user %s", userID)
+		return fmt.Errorf(
+			"not all clients accepted message for user %s",
+			userID,
+		)
 	}
+
 	return nil
 }
+
 func (m *Manager) HasActiveConnections(userID string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -160,6 +197,7 @@ func (c *Client) readPump(m *Manager) {
 
 func (c *Client) writePump(m *Manager) {
 	ticker := time.NewTicker(pingPeriod)
+
 	defer func() {
 		ticker.Stop()
 		m.Unregister(c.userID, c)
@@ -170,16 +208,20 @@ func (c *Client) writePump(m *Manager) {
 		case <-c.ctx.Done():
 			return
 
-		case message, ok := <-c.send:
-			if !ok {
-				return
-			}
-			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+		case message := <-c.send:
+			if err := c.conn.WriteMessage(
+				websocket.TextMessage,
+				message,
+			); err != nil {
 				return
 			}
 
 		case <-ticker.C:
-			if err := c.conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(10*time.Second)); err != nil {
+			if err := c.conn.WriteControl(
+				websocket.PingMessage,
+				nil,
+				time.Now().Add(10*time.Second),
+			); err != nil {
 				return
 			}
 		}
@@ -187,24 +229,26 @@ func (c *Client) writePump(m *Manager) {
 }
 
 func (m *Manager) CloseAll() {
-	if m.cancel != nil {
-		m.cancel()
-	}
+	m.cancel()
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
 
-	for userID, conns := range m.clients {
+	clients := make([]*Client, 0)
+
+	for _, conns := range m.clients {
 		for client := range conns {
-			client.once.Do(func() { close(client.send) })
-			if client.cancel != nil {
-				client.cancel()
-			}
-			client.conn.Close()
+			clients = append(clients, client)
 		}
-		delete(m.clients, userID)
 	}
 
-	m.clients = make(map[string]map[*Client]bool)
-	observability.Info(m.ctx, "WS All WebSocket connections closed")
+	m.mu.RUnlock()
+
+	for _, client := range clients {
+		m.Unregister(client.userID, client)
+	}
+
+	observability.Info(
+		m.ctx,
+		"All WebSocket connections closed",
+	)
 }

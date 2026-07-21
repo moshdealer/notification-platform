@@ -15,33 +15,66 @@ import (
 
 // Connect - только подключение (используется везде)
 func Connect(dbCfg *config.DatabaseCfg) (*gorm.DB, error) {
-	dsn := dbCfg.DatabaseDSN
-	if dsn == "" {
+	if dbCfg.DatabaseDSN == "" {
 		return nil, fmt.Errorf("POSTGRES_DSN env is not set")
 	}
+	if dbCfg.MaxOpenConns <= 0 {
+		return nil, fmt.Errorf(
+			"database.max_open_conns must be greater than zero: %d",
+			dbCfg.MaxOpenConns,
+		)
+	}
+	if dbCfg.MaxIdleConns < 0 {
+		return nil, fmt.Errorf(
+			"database.max_idle_conns must not be negative: %d",
+			dbCfg.MaxIdleConns,
+		)
+	}
+	if dbCfg.MaxIdleConns > dbCfg.MaxOpenConns {
+		return nil, fmt.Errorf(
+			"database.max_idle_conns (%d) must not exceed max_open_conns (%d)",
+			dbCfg.MaxIdleConns,
+			dbCfg.MaxOpenConns,
+		)
+	}
+	if dbCfg.ConnMaxLifetime <= 0 {
+		return nil, fmt.Errorf(
+			"database.conn_max_lifetime must be greater than zero: %s",
+			dbCfg.ConnMaxLifetime,
+		)
+	}
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	gormDB, err := gorm.Open(
+		postgres.Open(dbCfg.DatabaseDSN),
+		&gorm.Config{},
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to DB: %w", err)
 	}
 
-	sqlDB, err := db.DB()
+	sqlDB, err := gormDB.DB()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get sql.DB: %w", err)
 	}
 
-	// Настройки пула соединений
-	sqlDB.SetMaxIdleConns(15)
-	sqlDB.SetMaxOpenConns(60)
-	sqlDB.SetConnMaxLifetime(30 * time.Minute)
+	sqlDB.SetMaxOpenConns(dbCfg.MaxOpenConns)
+	sqlDB.SetMaxIdleConns(dbCfg.MaxIdleConns)
+	sqlDB.SetConnMaxLifetime(dbCfg.ConnMaxLifetime)
 	sqlDB.SetConnMaxIdleTime(10 * time.Minute)
 
 	if err := sqlDB.Ping(); err != nil {
+		_ = sqlDB.Close()
 		return nil, fmt.Errorf("failed to ping DB: %w", err)
 	}
 
-	log.Println("Successfully connected to PostgreSQL")
-	return db, nil
+	log.Printf(
+		"Successfully connected to PostgreSQL: max_open=%d max_idle=%d max_lifetime=%s",
+		dbCfg.MaxOpenConns,
+		dbCfg.MaxIdleConns,
+		dbCfg.ConnMaxLifetime,
+	)
+
+	return gormDB, nil
 }
 
 // Migrate - использует отдельное соединение, чтобы не ломать основной пул
