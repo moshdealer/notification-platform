@@ -239,7 +239,7 @@ func (s *Subscriber) processRecord(record *kgo.Record) error {
 		}
 	}
 
-	// Локально не доставили — сначала надёжно сохраняем в Redis.
+	// Если локально не доставили, сначала надёжно сохраняем в Redis.
 	if err := s.redisClient.AddUnread(
 		msgCtx,
 		userID,
