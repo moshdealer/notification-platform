@@ -4,9 +4,9 @@ server:
   write_timeout: 5s
 
 database:
-  max_open_conns: 20
-  max_idle_conns: 10
-  conn_max_lifetime: 1h
+  max_open_conns: 4
+  max_idle_conns: 2
+  conn_max_lifetime: 30m
 
 redis:
   db: 0
@@ -17,9 +17,9 @@ redis:
   broadcast_channel: "notifications:broadcast"
 
 logs:
-  logs_level: "debug"
+  logs_level: "warn"
 
-broker_type: "kafka"
+broker_type: "nats"
 nats:
   subject_new: "notifications_new"
   subject_read: "notifications.read"

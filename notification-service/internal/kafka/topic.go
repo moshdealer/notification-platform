@@ -38,8 +38,8 @@ func EnsureTopic(cfg *config.KafkaCfg) error {
 	}
 
 	if !topicDetails.Has(cfg.Topic) {
-		// Создаем топик: 3 партиции, 1 реплика
-		_, err = admin.CreateTopics(adminCtx, 3, 1, nil, cfg.Topic)
+		// Создаем топик: 5 партиции, 1 реплика
+		_, err = admin.CreateTopics(adminCtx, 5, 1, nil, cfg.Topic)
 		if err != nil {
 			return fmt.Errorf("failed to create topic %s: %w", cfg.Topic, err)
 		}

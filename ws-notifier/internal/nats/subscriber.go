@@ -74,56 +74,60 @@ func NewSubscriber(
 
 func (s *Subscriber) Start() error {
 	logger := observability.FromContext(s.rootCtx)
-	logger.Info("NATS JetStream Pull Subscriber starting", "stream", s.streamName)
+	logger.Info("NATS JetStream Pull Subscriber starting",
+		"stream", s.streamName,
+	)
 
-	// Pull Consumer
-	consumer, err := s.js.CreateOrUpdateConsumer(s.rootCtx, s.streamName, jetstream.ConsumerConfig{
-		Name:          "notification-service-ws-pull",
-		Durable:       "notification-service-ws-pull",
-		AckPolicy:     jetstream.AckExplicitPolicy,
-		MaxDeliver:    10,
-		AckWait:       180 * time.Second,
-		MaxAckPending: 50000,
-		FilterSubject: s.streamName + ".>",
-	})
+	consumer, err := s.js.CreateOrUpdateConsumer(
+		s.rootCtx,
+		s.streamName,
+		jetstream.ConsumerConfig{
+			Name:          "notification-service-ws-pull",
+			Durable:       "notification-service-ws-pull",
+			AckPolicy:     jetstream.AckExplicitPolicy,
+			MaxDeliver:    10,
+			AckWait:       180 * time.Second,
+			MaxAckPending: 50000,
+			FilterSubject: s.streamName + ".>",
+		},
+	)
 	if err != nil {
 		return fmt.Errorf("failed to create pull consumer: %w", err)
 	}
+
 	s.consumer = consumer
 
-	// Запускаем слушателя Redis broadcast
 	s.startRedisBroadcastListener()
 
-	// Обработка сообщений в цикле
-	go s.runPullLoop()
+	consumeCtx, err := consumer.Consume(
+		s.processMessage,
+		jetstream.PullMaxMessages(64),
+		jetstream.ConsumeErrHandler(
+			func(_ jetstream.ConsumeContext, consumeErr error) {
+				// При штатном shutdown ошибку не логируем
+				if s.rootCtx.Err() != nil {
+					return
+				}
 
-	logger.Info("NATS JetStream Pull Subscriber started")
-	return nil
-}
-
-func (s *Subscriber) runPullLoop() {
-	logger := observability.FromContext(s.rootCtx)
-
-	for {
-		select {
-		case <-s.rootCtx.Done():
-			return
-		default:
-		}
-
-		// Работаем с батчами по 500
-		msgs, err := s.consumer.Fetch(500, jetstream.FetchMaxWait(500*time.Millisecond))
-		if err != nil {
-			if err != jetstream.ErrNoMessages {
-				logger.Warn("Fetch error", "error", err)
-			}
-			continue
-		}
-
-		for msg := range msgs.Messages() {
-			s.processMessage(msg)
-		}
+				observability.Error(
+					s.rootCtx,
+					"NATS consumer error",
+					"error", consumeErr,
+				)
+			},
+		),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to start pull consumer: %w", err)
 	}
+
+	s.cons = consumeCtx
+
+	logger.Info("NATS JetStream Pull Subscriber started",
+		"prefetch_messages", 64,
+	)
+
+	return nil
 }
 
 func (s *Subscriber) processMessage(msg jetstream.Msg) {
@@ -134,52 +138,107 @@ func (s *Subscriber) processMessage(msg jetstream.Msg) {
 
 	var natsMessage model.NatsMessage
 	if err := json.Unmarshal(msg.Data(), &natsMessage); err != nil {
-		logger.Error("Failed to unmarshal message", "error", err)
-		msg.Nak()
-		return
-	}
+		logger.Error("Failed to unmarshal NATS message",
+			"error", err,
+		)
 
-	if err := msg.Ack(); err != nil {
-		logger.Error("Failed to Ack message", "error", err)
+		if termErr := msg.Term(); termErr != nil {
+			logger.Error("Failed to terminate malformed NATS message",
+				"error", termErr,
+			)
+		}
+
+		return
 	}
 
 	userID := natsMessage.Payload.UserID
 	priority := natsMessage.Payload.Priority
 	eventID := natsMessage.EventID
 
-	sentLocally := false
-
+	// Сначала пытаемся доставить локальному WebSocket-клиенту.
 	if s.wsManager.HasActiveConnections(userID) {
-		if sendErr := s.wsManager.SendToUser(msgCtx, userID, msg.Data()); sendErr == nil {
+		if sendErr := s.wsManager.SendToUser(
+			msgCtx,
+			userID,
+			msg.Data(),
+		); sendErr == nil {
 			if err := s.repo.MarkAsDelivered(msgCtx, eventID); err != nil {
-				logger.Warn("Failed to mark as delivered", "error", err, "event_id", eventID)
+				logger.Warn("Failed to mark notification as delivered",
+					"error", err,
+					"event_id", eventID,
+				)
 			}
-			sentLocally = true
-			observability.NotificationsDeliveredTotal.WithLabelValues("delivered").Inc()
+
+			observability.NotificationsDeliveredTotal.
+				WithLabelValues("delivered").Inc()
+
+			if err := msg.Ack(); err != nil {
+				logger.Error("Failed to Ack locally delivered message",
+					"error", err,
+					"event_id", eventID,
+				)
+			}
+
+			return
 		}
 	}
 
-	if !sentLocally {
-		if addErr := s.redisClient.AddUnread(msgCtx, userID, msg.Data()); addErr != nil {
-			logger.Error("Failed to save to Redis", "error", addErr, "user_id", userID)
-			if err := s.repo.MarkAsFailed(msgCtx, eventID); err != nil {
-				logger.Error("Failed to mark as failed", "error", err, "event_id", eventID)
-			}
-			return
+	if err := s.redisClient.AddUnread(
+		msgCtx,
+		userID,
+		msg.Data(),
+	); err != nil {
+		logger.Error("Failed to save notification to Redis",
+			"error", err,
+			"user_id", userID,
+			"event_id", eventID,
+		)
+
+		if markErr := s.repo.MarkAsFailed(msgCtx, eventID); markErr != nil {
+			logger.Error("Failed to mark notification as failed",
+				"error", markErr,
+				"event_id", eventID,
+			)
 		}
 
-		ttl := s.redisClient.DefaultTTL
-		if priority == "high" {
-			ttl = s.redisClient.HighTTL
+		if nakErr := msg.NakWithDelay(2 * time.Second); nakErr != nil {
+			logger.Error("Failed to Nak NATS message",
+				"error", nakErr,
+				"event_id", eventID,
+			)
 		}
 
-		if err := s.repo.MarkAsWaiting(msgCtx, eventID, ttl); err != nil {
-			logger.Error("Failed to mark as waiting", "error", err, "event_id", eventID)
-		}
+		return
+	}
 
-		if err := s.redisClient.PublishBroadcast(msgCtx, s.redisClient.BroadcastChannel, msg.Data()); err != nil {
-			logger.Error("Failed to publish to broadcast", "error", err)
-		}
+	ttl := s.redisClient.DefaultTTL
+	if priority == "high" {
+		ttl = s.redisClient.HighTTL
+	}
+
+	if err := s.repo.MarkAsWaiting(msgCtx, eventID, ttl); err != nil {
+		logger.Error("Failed to mark notification as waiting",
+			"error", err,
+			"event_id", eventID,
+		)
+	}
+
+	if err := s.redisClient.PublishBroadcast(
+		msgCtx,
+		s.redisClient.BroadcastChannel,
+		msg.Data(),
+	); err != nil {
+		logger.Error("Failed to publish notification to Redis broadcast",
+			"error", err,
+			"event_id", eventID,
+		)
+	}
+
+	if err := msg.Ack(); err != nil {
+		logger.Error("Failed to Ack persisted NATS message",
+			"error", err,
+			"event_id", eventID,
+		)
 	}
 }
 

@@ -44,7 +44,9 @@ func NewSubscriber(
 		kgo.ConsumerGroup(cfg.ConsumerGroup),
 		kgo.ConsumeTopics(cfg.Topic),
 		kgo.FetchMaxWait(500 * time.Millisecond),
-		kgo.DisableAutoCommit(), // будем коммитить вручную после обработки
+		// Offset отправляется вручную только после обработки
+		kgo.DisableAutoCommit(),
+		kgo.BlockRebalanceOnPoll(),
 		kgo.SessionTimeout(30 * time.Second),
 		kgo.HeartbeatInterval(3 * time.Second),
 	}
@@ -69,112 +71,224 @@ func NewSubscriber(
 
 func (s *Subscriber) Start() error {
 	logger := observability.FromContext(s.rootCtx)
-	logger.Info("Kafka Subscriber starting", "topic", s.topic, "group", s.group)
+
+	logger.Info("Kafka Subscriber starting",
+		"topic", s.topic,
+		"group", s.group,
+	)
 
 	s.startRedisBroadcastListener()
 
-	go func() {
-		for {
-			select {
-			case <-s.rootCtx.Done():
-				return
-			default:
-				fetches := s.client.PollFetches(s.rootCtx)
-				if fetches.IsClientClosed() {
-					return
-				}
-
-				// Обрабатываем записи батчами по 500
-				records := fetches.Records()
-
-				for i := 0; i < len(records); i += 500 {
-					end := i + 500
-					if end > len(records) {
-						end = len(records)
-					}
-
-					batch := records[i:end]
-
-					for _, record := range batch {
-						s.processRecord(record)
-					}
-				}
-			}
-		}
-	}()
+	go s.runPollLoop()
 
 	return nil
 }
 
+func (s *Subscriber) runPollLoop() {
+	logger := observability.FromContext(s.rootCtx)
+
+	const maxPollRecords = 500
+
+	for {
+		if s.rootCtx.Err() != nil {
+			return
+		}
+
+		// В отличие от PollFetches, ограничивает число записей,
+		// которые приложение должно обработать перед следующим poll.
+		fetches := s.client.PollRecords(
+			s.rootCtx,
+			maxPollRecords,
+		)
+
+		if fetches.IsClientClosed() {
+			return
+		}
+
+		if s.rootCtx.Err() != nil {
+			s.client.AllowRebalance()
+			return
+		}
+
+		for _, fetchErr := range fetches.Errors() {
+			logger.Error("Kafka fetch error",
+				"topic", fetchErr.Topic,
+				"partition", fetchErr.Partition,
+				"error", fetchErr.Err,
+			)
+		}
+
+		/*Сюда попадёт последняя последовательно обработанная запись
+		каждой partition. CommitRecords выберет максимальный offset
+		для каждой partition и отправит один commit-запрос*/
+		recordsToCommit := make([]*kgo.Record, 0)
+
+		fetches.EachPartition(func(partition kgo.FetchTopicPartition) {
+			var lastProcessed *kgo.Record
+
+			for _, record := range partition.Records {
+				if err := s.processRecord(record); err != nil {
+					logger.Error("Kafka record processing failed",
+						"topic", record.Topic,
+						"partition", record.Partition,
+						"offset", record.Offset,
+						"error", err,
+					)
+					break
+				}
+
+				lastProcessed = record
+			}
+
+			if lastProcessed != nil {
+				recordsToCommit = append(
+					recordsToCommit,
+					lastProcessed,
+				)
+			}
+		})
+
+		if len(recordsToCommit) > 0 {
+			commitCtx, cancel := context.WithTimeout(
+				s.rootCtx,
+				5*time.Second,
+			)
+
+			err := s.client.CommitRecords(
+				commitCtx,
+				recordsToCommit...,
+			)
+
+			cancel()
+
+			if err != nil {
+				logger.Error("Failed to commit Kafka offsets",
+					"error", err,
+					"partitions", len(recordsToCommit),
+				)
+			}
+		}
+
+		s.client.AllowRebalance()
+	}
+}
+
 // processRecord
-func (s *Subscriber) processRecord(record *kgo.Record) {
-	msgCtx, cancel := context.WithTimeout(s.rootCtx, 10*time.Second)
+func (s *Subscriber) processRecord(record *kgo.Record) error {
+	msgCtx, cancel := context.WithTimeout(
+		s.rootCtx,
+		10*time.Second,
+	)
 	defer cancel()
 
 	logger := observability.FromContext(msgCtx)
 
-	var natsMessage model.NatsMessage
-	if err := json.Unmarshal(record.Value, &natsMessage); err != nil {
-		logger.Error("Failed to unmarshal kafka message", "error", err)
-		return
+	var kafkaMessage model.NatsMessage
+	if err := json.Unmarshal(record.Value, &kafkaMessage); err != nil {
+		logger.Error("Failed to unmarshal Kafka message",
+			"error", err,
+			"topic", record.Topic,
+			"partition", record.Partition,
+			"offset", record.Offset,
+			"action", "skip_and_commit",
+		)
+		return nil
 	}
 
-	s.client.MarkCommitRecords(record) // Коммитим запись после успешного unmarshal
-
-	priority := natsMessage.Payload.Priority
+	priority := kafkaMessage.Payload.Priority
 	if priority == "" {
 		priority = "medium"
 	}
 
-	observability.BrokerConsumeReceivedTotal.WithLabelValues("kafka", priority).Inc()
+	observability.BrokerConsumeReceivedTotal.
+		WithLabelValues("kafka", priority).
+		Inc()
 
 	if !record.Timestamp.IsZero() {
 		latency := time.Since(record.Timestamp).Seconds()
-		observability.BrokerConsumeLatencySeconds.WithLabelValues("kafka", priority).Observe(latency)
+
+		observability.BrokerConsumeLatencySeconds.
+			WithLabelValues("kafka", priority).
+			Observe(latency)
 	}
 
-	userID := natsMessage.Payload.UserID
-	eventID := natsMessage.EventID
+	userID := kafkaMessage.Payload.UserID
+	eventID := kafkaMessage.EventID
 
-	sentLocally := false
-
+	// Сначала пытаемся доставить локально
 	if s.wsManager.HasActiveConnections(userID) {
-		if sendErr := s.wsManager.SendToUser(msgCtx, userID, record.Value); sendErr == nil {
-			if err := s.repo.MarkAsDelivered(msgCtx, eventID); err != nil {
-				logger.Warn("Failed to mark as delivered", "error", err, "event_id", eventID)
+		if sendErr := s.wsManager.SendToUser(
+			msgCtx,
+			userID,
+			record.Value,
+		); sendErr == nil {
+			if err := s.repo.MarkAsDelivered(
+				msgCtx,
+				eventID,
+			); err != nil {
+				logger.Warn("Failed to mark Kafka message as delivered",
+					"error", err,
+					"event_id", eventID,
+				)
 			}
-			sentLocally = true
-			observability.NotificationsDeliveredTotal.WithLabelValues("delivered").Inc()
+			observability.NotificationsDeliveredTotal.
+				WithLabelValues("delivered").
+				Inc()
+
+			return nil
 		}
 	}
 
-	if !sentLocally {
-		if addErr := s.redisClient.AddUnread(msgCtx, userID, record.Value); addErr != nil {
-			logger.Error("Failed to save to Redis", "error", addErr, "user_id", userID)
-			return
-		}
+	// Локально не доставили — сначала надёжно сохраняем в Redis.
+	if err := s.redisClient.AddUnread(
+		msgCtx,
+		userID,
+		record.Value,
+	); err != nil {
+		return fmt.Errorf(
+			"failed to save event %d to Redis: %w",
+			eventID,
+			err,
+		)
+	}
 
-		ttl := s.redisClient.DefaultTTL
-		if priority == "high" {
-			ttl = s.redisClient.HighTTL
-		}
+	ttl := s.redisClient.DefaultTTL
+	if priority == "high" {
+		ttl = s.redisClient.HighTTL
+	}
 
-		if err := s.repo.MarkAsWaiting(msgCtx, eventID, ttl); err != nil {
-			logger.Error("Failed to mark as waiting", "error", err, "event_id", eventID)
-		}
+	if err := s.repo.MarkAsWaiting(
+		msgCtx,
+		eventID,
+		ttl,
+	); err != nil {
+		logger.Error("Failed to mark Kafka message as waiting",
+			"error", err,
+			"event_id", eventID,
+		)
+	}
 
-		if err := s.redisClient.PublishBroadcast(msgCtx, s.redisClient.BroadcastChannel, record.Value); err != nil {
-			logger.Error("Failed to publish to broadcast", "error", err)
-		}
+	if err := s.redisClient.PublishBroadcast(
+		msgCtx,
+		s.redisClient.BroadcastChannel,
+		record.Value,
+	); err != nil {
+		logger.Error("Failed to publish Kafka message to broadcast",
+			"error", err,
+			"event_id", eventID,
+		)
 	}
 
 	logger.Info("Kafka message processed",
 		"user_id", userID,
 		"event_id", eventID,
 		"priority", priority,
+		"partition", record.Partition,
+		"offset", record.Offset,
 	)
-}
 
+	return nil
+}
 func (s *Subscriber) startRedisBroadcastListener() {
 	s.redisClient.SubscribeBroadcast(s.rootCtx, s.redisClient.BroadcastChannel, func(data []byte) {
 		bcCtx, bcCancel := context.WithTimeout(s.rootCtx, 5*time.Second)
